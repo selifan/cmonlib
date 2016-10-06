@@ -2,6 +2,7 @@
 /**
 * Web Service wrapper
 * @author Alex "Selifan"
+* last modified 2016-10-06
 * @license MIT
 */
 class WaService {
@@ -122,11 +123,36 @@ class WaService {
 		if ($this->output==='print_r')
 			$ret = '<pre>'.print_r($result,1) . '</pre>';
 
-		elseif ($this->output==='json')
+		elseif ($this->output==='json') {
 			$ret = constant('JSON_UNESCAPED_UNICODE') ? json_encode($result, JSON_UNESCAPED_UNICODE)
-			: json_encode($result);
-
+			  : json_encode($result);
+		}
+		elseif ($this->output==='xml') {
+			$xml = new SimpleXMLElement("<?xml version=\"1.0\" encoding=\"UTF-8\"?><response/>");
+			$ret = $this->array2xml($result, $xml);
+			$ret = $xml->asXML();
+		}
 		return $ret;
+	}
+	/**
+	* recursive converting multi-level array to XML,
+	* source from http://stackoverflow.com/questions/1397036/
+	*
+	* @param mixed $data source assoc.array
+	* @param mixed $xml_data output SimpleXMLElement object
+	*/
+	private function array2xml( $data, &$xml_data ) {
+	    foreach( $data as $key => $value ) {
+	        if( is_array($value) ) {
+	            if( is_numeric($key) ){
+	                $key = 'item'.$key; //dealing with <0/>..<n/> issues
+	            }
+	            $subnode = $xml_data->addChild($key);
+	            $this->array2xml($value, $subnode);
+	        } else {
+	            $xml_data->addChild("$key",htmlspecialchars("$value", ENT_COMPAT|ENT_NOQUOTES, 'UTF-8'));
+	        }
+	    }
 	}
 
 	/**
