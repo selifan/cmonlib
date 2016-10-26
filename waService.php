@@ -2,7 +2,7 @@
 /**
 * Web Service wrapper
 * @author Alex "Selifan"
-* last modified 2016-10-06
+* last modified 2016-10-24
 * @license MIT
 */
 class WaService {
@@ -81,8 +81,8 @@ class WaService {
 
 		$action = isset($this->_data['action']) ? $this->_data['action'] : '';
 
-		if (isset($this->_data['resulttype'])) {
-			$this->output = $this->_data['resulttype'];
+		if (isset($this->_data['format'])) {
+			$this->output = $this->_data['format'];
 		}
 
 		$ok = $this->authorize();
@@ -110,7 +110,8 @@ class WaService {
 			}
 		}
 		if (($this->_logging) && is_callable($this->_logging)) {
-			$logstr = ($this->_username) ? "User: " . $this->_username : '';
+			$logstr = (isset($_SERVER['REMOTE_ADDR']) ? $_SERVER['REMOTE_ADDR']:'')
+			  . (($this->_username) ? ", User: " . $this->_username : '');
 			$logstr .= " request: ".$action . ", result: ".$result['result'] .
 				(!empty($result['message']) ? (', message: '.$result['message']) : '');
 			call_user_func($this->_logging, $logstr);
@@ -131,6 +132,7 @@ class WaService {
 			$xml = new SimpleXMLElement("<?xml version=\"1.0\" encoding=\"UTF-8\"?><response/>");
 			$ret = $this->array2xml($result, $xml);
 			$ret = $xml->asXML();
+#			file_put_contents('_out.xml',$ret); # debug
 		}
 		return $ret;
 	}
