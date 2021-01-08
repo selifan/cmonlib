@@ -10,8 +10,8 @@ class Sberbank {
     private static $password = "password";
     private static $serviceUrl = "https://3dsec.sberbank.ru/payment/rest/"; #
     protected $logging = 1;
-    static $debug = 1;
-
+    static $debug = 0;
+    protected $makeBundle = FALSE; # делать ли блок с корзиной (не тестовой среде Bundle вызывает внутреннюю ошибку (по сост. на 2020-12-28)
     public function __construct($params = FALSE) {
         if (is_array($params)) $this->setParams($params);
     }
@@ -66,59 +66,44 @@ class Sberbank {
             'password' => self::$password,
             'orderNumber' => $order_id,         /* ID заказа в магазине */
         ];
-        echo "login:".self::$login . ' passw:'.self::$password;
+        # echo "login:".self::$login . ' passw:'.self::$password;
 
-        /* Корзина для чека (необязательно)
-        $cart = array(
-            array(
-                'positionId' => 1,
-                'name' => 'Название товара',
-                'quantity' => array(
-                    'value' => 1,
-                    'measure' => 'шт'
-                ),
-                'itemAmount' => 1000 * 100,
-                'itemCode' => '123456',
-                'tax' => array(
-                    'taxType' => 0,
-                    'taxSum' => 0
-                ),
-                'itemPrice' => 1000 * 100,
-            )
-        );
-        **/
+        /* # Корзина для чека (для фискализации обязательно!) */
         $email = isset($params['email']) ? $params['email'] : '';
         $insrname = isset($params['fullname']) ? $params['fullname'] : '';
         $premium = number_format($params['premium'],2);
         $premiumCop = round($params['premium'] * 100);
 
-        # $description = "DOG_NUMBER: (1-pol) $params[policyno] (1-sum) $premium\nINSURER_NAME: $insrname";
-        $description = "Оплата полиса $params[policyno]";
+        $description = "DOG_NUMBER: (1-pol) $params[policyno] (1-sum) $premium\nINSURER_NAME: $insrname";
+        # $description = "Оплата полиса $params[policyno]";
         # поле в формате как Егор сказал, для дальнейшей корректной обработки у нас
         $vars['description'] = $description;
-        $cart = [];
-        $cart[] = [
-          'positionId' => 1,
-          'name' => 'оплата полиса', # $description
-          'quantity'=> ['value'=>1, 'measure'=>'pcs'],
-          'itemAmount' => $premiumCop,
-          'itemCode' => rand(1000,900000), # $params['policyno'],
-        ];
 
-        $vars['orderBundle'] = json_encode(
-            [
-              'customerDetails' => [
-                'email' => $email,
-                'fullName' => $insrname,
-              ],
+        if ( $this->makeBundle ) {
 
-                'cartItems' => array(
-                    'items' => $cart
-                )
-            ]
-            , JSON_UNESCAPED_UNICODE
-        );
+            $cart = [];
+            $cart[] = [
+              'positionId' => 1,
+              'name' => $description,
+              'quantity'=> ['value'=>1, 'measure'=>'pcs'],
+              'itemAmount' => $premiumCop,
+              'itemCode' => $params['policyno'], # rand(1000,900000) | $params['policyno'],
+            ];
+            $vars['orderBundle'] = json_encode(
+                [
+                  'customerDetails' => [
+                    'email' => $email,
+                    'fullName' => $insrname,
+                  ],
 
+                    'cartItems' => array(
+                        'items' => $cart
+                    )
+
+                ]
+                , JSON_UNESCAPED_UNICODE
+            );
+        }
         /* Сумма заказа в копейках */
         $vars['amount'] = $premiumCop;
 
