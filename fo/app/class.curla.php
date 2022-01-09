@@ -22,12 +22,12 @@ class CurlA {
     public static $max_redir = 4;
     public static $disable_proxy = FALSE; # force disable proxy even if proxy params not empty
 
-    public static $timeout = 5;
+    public static $timeout = 20;
     public static $curl_error_code = 0;
     public static $curl_error_message = '';
     public static $response = '';
-    private static $debug = 1;
-    static $POST = 'AUTO';
+    private static $debug = 0;
+    # static $POST = 'AUTO';
     public static function getProxyParams() {
         if (self::$proxy['addr'] !== NULL) return;
         self::$proxy['addr'] = appEnv::getConfigValue('proxy_addr');
@@ -117,6 +117,9 @@ class CurlA {
 
     public static function getErrno() {
         return self::$curl_error_code;
+    }
+    public static function getRawResponse() {
+        return self::$response;
     }
     public static function getErrMessage() {
         return self::$curl_error_message;
