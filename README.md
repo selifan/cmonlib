@@ -1,4 +1,2 @@
-# cmonlib
-Modules of common use
-# 2020-12-30 
-* added FO files
+# cmonlib - Modules of common use, some libs for webapp projects
+Here are just misc. PHP/js modules and libs developed and used in my projects.
