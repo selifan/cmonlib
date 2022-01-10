@@ -6,33 +6,32 @@
 * @author Alexander Selifonov <alex@selifan.ru>
 * @copyright Alexander Selifonov <alex@selifan.ru>
 * @link https://www.github.com/selifan
-* @version 0.02.003
-* modified 2016-10-28
+* @version 0.3.01
+* modified 2019-10-02
 */
 class ImageFx {
 
+    const FX_SEQUENTIAL = 1; // apply effect in sequential manner, after applying previous (if exist)
 	private $_width=0, $_height=0;
-	private $_method = '';
+    private $_method = '';
+	private $_applyMode = 0; // how to apply effect: 0 - over origianl image, 1 - over current (modified) image
+
 	private $_bwmode = 0;
 	private $_thresholds = array();
 	private $_outfile = '';
 	private $_imgh = 0, $hOut = 0;
-	private $_chained = false;
+
 	private $_verbose = 1; # show some executing-time messages
 	private $_factor = 0;
-	private $_mozaic = array('stepx'=>0, 'stepy'=>0, 'avgcolor'=>false, 'curcoord'=>array(-1,-1));
+	private $_pixelize = array('stepx'=>0, 'stepy'=>0, 'avgcolor'=>false, 'curcoord'=>array(-1,-1));
     private $_imgSrc = false;
     private $_stroke = false;
+    private $_brightnessFactor = 0; # Factor for tuneBrightness 0 - no change, -100 - to black, +100 - to abs.white
     private $_sendToStream = false; # output generated image directly to client response
 
 	static $MAX_COLORVALUE = 255;
 	static $DEFAULT_STEP   = 20;
     static $JPG_QUALITY = 75;
-
-	public function setChained($b_chain = true) {
-		$this->_chained = $b_chain;
-		return $this;
-	}
 
 	public function sendToStream($b_send = true) {
 		$this->_sendToStream = $b_send;
@@ -49,10 +48,11 @@ class ImageFx {
 		$this->_hOut = imagecreatetruecolor($this->_width,$this->_height);
 		imagecopy($this->_hOut, $this->_imgh,0,0,0,0,$this->_width, $this->_height);
 
-		$this->_imgSrc = ($this->_chained) ? $this->_hOut : $this->_imgh;
+        # $this->_imgSrc = ($this->_chained) ? $this->_hOut : $this->_imgh;
+		$this->_imgSrc = $this->_imgh;
 
 		if (is_array($params)) {
-			if (isset($params[0])) {
+			if (isset($params[0]) && is_array($params[0]) ) {
 				foreach($params as $pno => $area) {
 					if (is_numeric($pno)) $this->_handleArea($area);
 				}
@@ -124,38 +124,44 @@ class ImageFx {
 	private function _handleArea($params) {
 
 		$this->_method = isset($params['method']) ? trim($params['method']) : '';
-		$this->_bwmode = isset($params['bw']) ? $params['bw'] : 0;
+        if ($this->_method === 'brightness')
+            $this->_brightnessFactor = isset($params['factor']) ? $params['factor'] : 0;
+        else
+            $this->_factor = isset($params['factor']) ? $params['factor'] : 0.5;
+
+        $this->_bwmode = isset($params['bw']) ? $params['bw'] : 0;
+        $this->_applyMode = isset($params['apply']) ? $params['apply'] : 0;
+
 		$this->_thresholds = (isset($params['thresholds']) && is_array($params['thresholds'])) ?
 			$params['thresholds'] : array(4, 25, 70, 120, 195);
 		$xfrom = $yfrom = 0;
-		$this->_factor = isset($params['factor']) ? $params['factor'] : 0.5;
 
 		$xto = $this->_width - 1;
 		$yto = $this->_height - 1;
-		if ($this->_method === 'mozaic') {
+		if ($this->_method === 'pixelize') {
             if (!isset($params['step'])) {
-            	$this->_mozaic['stepx'] = $this->_mozaic['stepy'] = $this->_calcX(self::$DEFAULT_STEP);
+            	$this->_pixelize['stepx'] = $this->_pixelize['stepy'] = $this->_calcX(self::$DEFAULT_STEP);
 			}
 			elseif(is_array($params['step'])) {
-				$this->_mozaic['stepx'] = $this->_calcX($params['step'][0]);
-				$this->_mozaic['stepy'] = isset($params['step'][1]) ?
+				$this->_pixelize['stepx'] = $this->_calcX($params['step'][0]);
+				$this->_pixelize['stepy'] = isset($params['step'][1]) ?
 					$this->_calcY($params['step'][1]) : $this->_calcY($params['step'][0]);
 			}
 			elseif(is_numeric($params['step'])) {
-            	$this->_mozaic['stepx'] = $this->_mozaic['stepy'] = $this->_calcX($params['step']);
+            	$this->_pixelize['stepx'] = $this->_pixelize['stepy'] = $this->_calcX($params['step']);
 			}
             $this->_stroke = isset($params['stroke']) ? $params['stroke'] : false;
 
             # avoid too small cell sizes:
-			$this->_mozaic['stepx'] = max(4,$this->_mozaic['stepx']);
-			$this->_mozaic['stepy'] = max(4,$this->_mozaic['stepy']);
+			$this->_pixelize['stepx'] = max(4,$this->_pixelize['stepx']);
+			$this->_pixelize['stepy'] = max(4,$this->_pixelize['stepy']);
 
-			$this->_mozaic['avgcolor'] = false;
-			$this->_mozaic['curcoord'] = array(-1,-1);
+			$this->_pixelize['avgcolor'] = false;
+			$this->_pixelize['curcoord'] = array(-1,-1);
 		}
-
 		if (!empty($params['areatype']) && $params['areatype'] === 'polygon') {
-			if(!isset($params['points']) || !is_array($params['points']) || count($params['points']) < 6)
+
+            if(!isset($params['points']) || !is_array($params['points']) || count($params['points']) < 6)
 				return;
 			$poly = array();
 			$minX = $this->_width - 1;
@@ -175,8 +181,9 @@ class ImageFx {
 			#echo 'created poly:'; print_r($poly); return;
 			for ($x = $minX; $x<= $maxX; $x++) {
 				for ($y = $minY; $y<= $maxY; $y++) {
-					if ($this->insidePolygon(array($x,$y), $poly))
+					if ($this->insidePolygon(array($x,$y), $poly)) {
 						$this->_applyToPixel($x,$y);
+                    }
 				}
 			}
 		}
@@ -199,28 +206,38 @@ class ImageFx {
 
 	private function _applyToPixel($x,$y) {
 
-		$clr = imagecolorsforindex($this->_imgSrc, imagecolorat($this->_imgSrc,$x, $y));
+        if ($this->_applyMode >= self::FX_SEQUENTIAL) {
+		    $clr = imagecolorsforindex($this->_hOut, imagecolorat($this->_hOut,$x, $y));
+        }
+        else
+            $clr = imagecolorsforindex($this->_imgSrc, imagecolorat($this->_imgSrc,$x, $y));
 
 		$mcolor = array($clr['red'], $clr['green'], $clr['blue'], $clr['alpha']);
-#		$a = $clr['alpha']; # TODO: use alpha if in and out images have alpha channel
+        $srcStr = implode(',', $mcolor);
+        # $a = $clr['alpha']; # TODO: use alpha if in and out images have alpha channel
 		if ($this->_bwmode)
 			$mcolor = $this->getGrayScale($mcolor);
 
 		switch(strtolower($this->_method)) {
             case 'grayscale':
+                if (!$this->_bwmode) $mcolor = $this->getGrayScale($mcolor);
             	break;
 			case 'quantize':
 				$mcolor = $this->_quantizeColor($mcolor);
 				break;
-			case 'colormask':
-				$mcolor = $this->_colorMask($mcolor);
+			case 'colorfilter':
+				$mcolor = $this->_colorFilter($mcolor);
 				break;
-			case 'mozaic':
-				$mcolor = $this->_mozaic($mcolor, $x, $y);
+			case 'pixelize':
+				$mcolor = $this->_pixelize($mcolor, $x, $y);
 				break;
+            case 'brightness':
+                $mcolor = $this->_tuneBrightness($mcolor);
+                break;
 			default:
 				break;
 		}
+
 		$outpix = imagecolorallocate($this->_hOut, $mcolor[0], $mcolor[1],$mcolor[2]);
 		imagesetpixel ($this->_hOut, $x ,$y, $outpix);
 	}
@@ -256,12 +273,26 @@ class ImageFx {
 		return $ret;
 	}
 
+    /**
+    * change pixel Brightness
+    * @since 0.3
+    * @param mixed $clr
+    */
+    private function _tuneBrightness($clr) {
+        $brFactor = max(0, 1 + ($this->_brightnessFactor / 100)); // -20 => 0.8 from original brightness, +20 => new Brt=1.2 * orig.Brt
+        if ($brFactor == 1) return $clr;
+        $ret = [];
+        foreach($clr as $no => $color) {
+            $ret[$no] = min(255, round($color * $brFactor));
+        }
+        return $ret;
+    }
 	/**
 	* apply "factor" values to each color in the pixel
 	*
 	* @param mixed $clr array, [r,g,b] values
 	*/
-	private function _colorMask($clr) {
+	private function _colorFilter($clr) {
 		$ret = array();
 		$tfact = is_scalar($this->_factor)? array($this->_factor,$this->_factor, $this->_factor)
 		  : array_values($this->_factor);
@@ -300,20 +331,22 @@ class ImageFx {
 	* @param mixed $x  pixel coordinate, s and y
 	* @param mixed $y
 	*/
-	private function _mozaic($clr, $x, $y) {
-		$cubeX = min($this->_width-1, floor($x / $this->_mozaic['stepx']) * $this->_mozaic['stepx']);
-		$cubeY = min($this->_height-1, floor($y / $this->_mozaic['stepy']) * $this->_mozaic['stepy']);
-		if ($this->_mozaic['curcoord'][0] != $cubeX || $this->_mozaic['curcoord'][1] != $cubeY) {
-			$this->_mozaic['curcoord'] = array($cubeX, $cubeY);
-			$x2 = min(($this->_width-1) , ($cubeX+$this->_mozaic['stepx']-1));
-			$y2 = min(($this->_height-1), ($cubeY+$this->_mozaic['stepy']-1));
+	private function _pixelize($clr, $x, $y) {
+		$cubeX = min($this->_width-1, floor($x / $this->_pixelize['stepx']) * $this->_pixelize['stepx']);
+		$cubeY = min($this->_height-1, floor($y / $this->_pixelize['stepy']) * $this->_pixelize['stepy']);
+		if ($this->_pixelize['curcoord'][0] != $cubeX || $this->_pixelize['curcoord'][1] != $cubeY) {
+			$this->_pixelize['curcoord'] = array($cubeX, $cubeY);
+			$x2 = min(($this->_width-1) , ($cubeX+$this->_pixelize['stepx']-1));
+			$y2 = min(($this->_height-1), ($cubeY+$this->_pixelize['stepy']-1));
 
-			$clr1 = imagecolorsforindex($this->_hOut, imagecolorat($this->_imgSrc,$cubeX, $cubeY));
-			$clr2 = imagecolorsforindex($this->_hOut, imagecolorat($this->_imgSrc,$x2, $cubeY));
-			$clr3 = imagecolorsforindex($this->_hOut, imagecolorat($this->_imgSrc,$cubeX, $y2));
-			$clr4 = imagecolorsforindex($this->_hOut, imagecolorat($this->_imgSrc,$x2, $y2));
+            $imgHand = ($this->_applyMode>= self::FX_SEQUENTIAL) ? $this->_hOut : $this->_imgSrc;
 
-			$this->_mozaic['avgcolor'] = array(
+			$clr1 = imagecolorsforindex($this->_hOut, imagecolorat($imgHand,$cubeX, $cubeY));
+			$clr2 = imagecolorsforindex($this->_hOut, imagecolorat($imgHand,$x2, $cubeY));
+			$clr3 = imagecolorsforindex($this->_hOut, imagecolorat($imgHand,$cubeX, $y2));
+			$clr4 = imagecolorsforindex($this->_hOut, imagecolorat($imgHand,$x2, $y2));
+
+			$this->_pixelize['avgcolor'] = array(
 				 round(($clr1['red']+$clr2['red']+$clr3['red']+$clr4['red'])/4)
 				,round(($clr1['green']+$clr2['green']+$clr3['green']+$clr4['green'])/4)
 				,round(($clr1['blue']+$clr2['blue']+$clr3['blue']+$clr4['blue'])/4)
@@ -321,7 +354,7 @@ class ImageFx {
 			);
 		}
 
-		$ret = $this->_mozaic['avgcolor'];
+		$ret = $this->_pixelize['avgcolor'];
 		if (!empty($this->_stroke)) {
 			$sttype = isset($this->_stroke['type']) ? $this->_stroke['type'] : '3D';
 			$stsize = isset($this->_stroke['size']) ? $this->_stroke['size'] : 1;
@@ -334,10 +367,10 @@ class ImageFx {
 					if ($x < ($cubeX+$stsize)) { # left border
 						$ret = $this->_lighten($ret, 0.3);
 					}
-					if ($x >= $cubeX+$this->_mozaic['stepx']-$stsize) { # right border
+					if ($x >= $cubeX+$this->_pixelize['stepx']-$stsize) { # right border
 						$ret = $this->_darken($ret, 0.3);
 					}
-					if ($y >= $cubeY+$this->_mozaic['stepy']-$stsize) { # bottom border
+					if ($y >= $cubeY+$this->_pixelize['stepy']-$stsize) { # bottom border
 						$ret = $this->_darken($ret, 0.3);
 					}
 			}
