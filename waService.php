@@ -2,7 +2,7 @@
 /**
 * Web Service wrapper
 * @author Alex "Selifan"
-* last modified 2016-10-24
+* last modified 2022-08-20
 * @license MIT
 */
 class WaService {
