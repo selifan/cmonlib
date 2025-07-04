@@ -1,5 +1,5 @@
 /* bankHelper.js поиск  банка по веденному БИК - dadata + jquery.suggestions
-* version 0.01.001 2025-07-04
+* version 0.10.001 2025-07-04
 */
 (function() {
     $(function() {
@@ -27,28 +27,13 @@
                 if(typeof(suggestion.data) !='undefined') {
                     // console.log('selected from input: ', elemId);
                     // console.log('DADATA FOUND data:', suggestion.data); // debug view
-                    var elParts = elemId.split("_"); // ddd,insr,reg,[1...N]
-                    var fact = (elParts[2]==='fact') ? 'f':'';
-                    var subNo = (typeof(elParts[3])!=='undefined') ? elParts[3] : '';
-                    var baseNm = '#' + elParts[1] + fact;
-                    var foundRegionId = false;
-                    /*
-                    if (suggestion.data.house_kladr_id) $("#dd_kladr").val(suggestion.data.house_kladr_id);
-                    else if (suggestion.data.street_kladr_id) $("#dd_kladr").val(suggestion.data.street_kladr_id);
-                    else if (suggestion.data.street_kladr_id) $("#dd_kladr").val(suggestion.data.street_kladr_id);
-                    else $("#dd_kladr").val("");
-                    */
-                    if (suggestion.data.bic) $("input[name^="+elParts[0]+"].bankbic").val(suggestion.data.bic);
-                    else $("input[name^="+elParts[0]+"].bankbic").val("");
-                    if (suggestion.data.correspondent_account) $("input[name^="+elParts[0]+"].bankks").val(suggestion.data.correspondent_account);
-                    else $("input[name^="+elParts[0]+"].bankks").val("");
-
-                    dadataUtl.hideId = elemId;
-                    window.setTimeout(dadataUtl.hideInput, 200);
+                    var elParts = elemId.split("_");
+                    var pref = elParts[0];
+                    if (suggestion.data.bic) $("input[name^="+pref+"].bankbic").val(suggestion.data.bic);
+                    else $("input[name^="+pref+"].bankbic").val("");
+                    if (suggestion.data.correspondent_account) $("input[name^="+pref+"].bankks").val(suggestion.data.correspondent_account);
+                    else $("input[name^="+pref+"].bankks").val("");
                 }
-                // else console.log('DADATA FAIL ', suggestion);
-
-
             }
         });
     });
