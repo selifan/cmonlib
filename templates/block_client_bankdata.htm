@@ -1,0 +1,40 @@
+<div id="client_bankdata" class="text-start block_insr_fiz p-3 border-top">
+  <legend>Данные о банке и счете клиента</legend>
+  <div class="row">
+    <div class="col-lg-8 col-md-8">
+      Название Банка<br>
+      <input type="text" name="client_bankname" required class="form-control bankname"/>
+    </div>
+    <div class="col-lg-2 col-md-3">
+      БИК Банка<br>
+      <input type="text" name="client_bankbic" required class="form-control bankbic" />
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-lg-3 col-md-3">
+      № корр.счета<br>
+      <input type="text" name="client_corracc" required class="form-control bankks" />
+    </div>
+
+    <div class="col-lg-3 col-md-3">
+      № счёта клиента<br>
+      <input type="text" name="client_persacc" required class="form-control" />
+    </div>
+    <div class="col-lg-4 col-md-4">
+      ФИО владельца счёта<br>
+      <input type="text" name="client_accowner" required class="form-control" ondblclick="bankData.autoFillOwner(this)" title="Даойной клик - занести ФИО Страхователя"/>
+    </div>
+
+  </div>
+</div>
+<script type="text/javascript">
+bankData = {
+  autoFillOwner: function(fld) {
+    var fam = $("#insrfam").val(), imia = $("#insrimia").val(), otch = $("#insrotch").val();
+    var fullname = fam + (imia ? (" "+imia):'') + (otch ? (" "+otch):'');
+    console.log(fullname);
+    fld.value = fullname;
+  }
+};
+</script>
+
