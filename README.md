@@ -7,5 +7,5 @@ js/bankHelper.js - делает поле ввода с типом bankname ав�
 ```HTML
 <input type="text" name="my_banknaimenovanie" class="bankname" />
 <input type="text" name="my_bank_korrschet" class="bankks" />
-<input type="text" name="may_bank_bic" class="bankbic" />
+<input type="text" name="my_bank_bic" class="bankbic" />
 ```
