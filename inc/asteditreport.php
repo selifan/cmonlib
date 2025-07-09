@@ -49,6 +49,7 @@ EOJS;
           'color' => '000000',
           'align' => 'C',
           ],
+          'title' => ($tbl->reports[$reportid]['title'] ?? 'Report'),
           'export' => [ 'filename' => $reportid ],
           'query' => $repQuery,
           'fields' => [],
@@ -63,12 +64,15 @@ EOJS;
             ];
             $cfg['fields'][$fldname] = $arFld;
         }
+        /*
+        exit('1' . AjaxResponse::showMessage('finally CFG for flexreport: <pre>' . print_r($cfg,1)
+          . "<br>reports:". print_r($tbl->reports,1). '</pre>'));
+        */
+
         include_once('flexreport.php');
         $flexRep = new \SelifanLab\FlexReport($cfg);
         # appEnv::$_p['fr_format'] = $_GET['fr_format'] = 'xlsx';
         $flexRep->execute(['fr_format'=>'xlsx']); # TODO: pass params?
-        # exit('1' . AjaxResponse::showMessage('finally CFG for flexreport: <pre>' . print_r($cfg,1)
-        #   . "<br>reports:". print_r($tbl->reports,1). '</pre>'));
 
         return FALSE;
     }
