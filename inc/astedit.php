@@ -3,8 +3,8 @@
 * @package astedit , Database tables create/upgrade/browse/edit engine  (CRUD++)
 * @name astedit(x).php - main module, classes CFieldDefinition,CIndexDefinition,CTableDefinition
 * @author Alexander Selifonov, < alex [at] selifan dot ru >
-* @Version 1.86.001
-* updated 2025-07-09
+* @Version 1.86.002
+* updated 2025-07-10
 **/
 # error_reporting (E_ALL ^ E_NOTICE);
 # User field types, added by including your own classes
@@ -1200,7 +1200,7 @@ class CTableDefinition
 
         case 'TOOLBAR': # HTML code for toolbar (buttons etc.)
           $htmlcode  = isset($tar[1])? $tar[1] : '';
-          if($htmlcode) $this->toolBar[] = $htmlcode;
+          if($htmlcode) $this->toolBar[] = astedit::evalValue($htmlcode, $this->id);
           break;
         case 'RECURSIVE':
           $this->recursive = $tar[1];
@@ -2120,14 +2120,21 @@ class CTableDefinition
       if(isset($_SESSION[$this->filterPrefix.$this->tbrowseid]['page']))
         unset($_SESSION[$this->filterPrefix.$this->tbrowseid]['page']);
   }
-
-  function DrawBrowsePage($ajax=0) {
-     global $ast_datarow, $ast_tips, $cursortfld, $cursortord,$as_cssclass,
-     $ast_browse_jsdrawn, $astbtn, $ast_parm;
+  public function prepareOrder() {
+     global $cursortfld, $cursortord;
      if(empty($cursortfld)) {
         $cursortfld = $_SESSION[$this->filterPrefix.'ast_sortfld_'.$this->id] ?? '';
         $cursortord = $_SESSION[$this->filterPrefix.'ast_sortord_'.$this->id] ?? '0';
      }
+     if(!empty($cursortfld)) {
+        $ord = empty($cursortord)?' DESC':'';
+        return ($cursortfld . $ord);
+     }
+     return '';
+  }
+  function DrawBrowsePage($ajax=0) {
+     global $ast_datarow, $ast_tips, $cursortfld, $cursortord,$as_cssclass,
+     $ast_browse_jsdrawn, $astbtn, $ast_parm;
      if (astedit::$time_monitoring) WriteDebugInfo($this->id . ':render grid start, time: '.microtime());
 
      if($ajax) ob_start();
@@ -2157,10 +2164,7 @@ class CTableDefinition
      if(!empty($this->groupby) && !empty($this->sumfields))
        $sqlqry .= ' GROUP BY '.$this->groupby;
 
-     if(!empty($cursortfld)) {
-        $ord = empty($cursortord)?' DESC':'';
-        $this->browseorder = $cursortfld.$ord;
-     }
+     $this->browseorder = $this->prepareOrder();
      # add ORDER BY
      if(!empty($this->browseorder))
        $sqlqry .= ' ORDER BY '.$this->browseorder;
