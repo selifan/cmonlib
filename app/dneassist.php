@@ -22,13 +22,23 @@ class DneAssist {
     public static function addMapping($tableid, $dneFilePath) {
         DNExchange\DNE::addMapping($tableid, $dneFilePath);
     }
+    # HTML код для ячейки со ссылкой на вызов ф-ции экспорта записи
+    public static function getExportRecordHtml($tableName='') {
+        # Экспорт настройки в XML
+        $exportTitle = AppEnv::getLocalized('dne_exportlink_title_'.$tableName,'Выгрузить в XML');
+        # writeDebugInfo("getExportRecordHtml($tableName)");
+
+        $retHtml = "<div class=\"ct\"><span role=\"button\" class=\"text-secondary\" onclick=\"dneLoader.exportNodeToXML({ID})\" title=\"$exportTitle\">"
+         . "<i class=\"bi bi-floppy-fill font12\"></i></span></div>";
+        return $retHtml;
+    }
     # Генерация HTML кода кнопки "импорт из XML", для вывода на тулбар под гридом astedit
     public static function getButtonHtml($tableName='') {
         # writeDebugInfo("passed : ", $tableName);
         if(!is_string($tableName)) $tableName = '';
         $btLabel = AppEnv::getLocalized('dne_importbtn_label', 'Импорт из XML');
         $btTitle = AppEnv::getLocalized('dne_importbtn_title_'.$tableName, 'Импортировать данные из XML');
-        $ret = "<input type=\"button\" id=\"{$tableName}_appendxml\" class=\"btn btn-primary\" value=\"$btLabel\" onclick=\"dneLoader.importFromXml()\" title=\"$btTitle\"/>";
+        $ret = "<input type=\"button\" id=\"{$tableName}_appendxml\" class=\"btn btn-primary me-1\" value=\"$btLabel\" onclick=\"dneLoader.importFromXml()\" title=\"$btTitle\"/>";
         return $ret;
     }
 
