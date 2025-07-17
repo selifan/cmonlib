@@ -841,11 +841,12 @@ class CTableDefinition
           }
           break;
         case 'LOADJSCODE':
-          # callback for getting js code block
-          $loaderFn = $tar[1];
+          # callback for getting js code block OR javascript file name (2025-07-10)
+          $loaderFn = $tar[1] ?? '';
           if(is_callable($loaderFn)) {
               $this->_jscode .= call_user_func($loaderFn, $this->id);
           }
+          elseif(is_file($loaderFn)) $this->_jscode .= file_get_contents($loaderFn);
           break;
 
         case 'SEARCH':
@@ -1169,6 +1170,7 @@ class CTableDefinition
           break;
         case 'CUSTOMCOLUMN': # non-field columns in browse page #ex-BRCUSTOMHREF
           $htmlcode  = isset($tar[1])? $tar[1] : '';
+          if(!empty($htmlcode)) $htmlcode = astedit::evalValue($htmlcode, $this->id);
           $htitle  = isset($tar[2])? $tar[2] : '';
           $addon = isset($tar[3])? $tar[3] : ''; # доп.атрибуты для <a href="" ...>
           if(!empty($htmlcode)) {
@@ -1178,24 +1180,31 @@ class CTableDefinition
           break;
 
         case 'REPORT':
-          $rep_id = $tar[1] ?? 'report'.(count($this->reports)+1);
+          $rep_id = !empty($tar[1]) ? $tar[1] : ('report'.(count($this->reports)+1));
           $rep_fields = $tar[2] ?? '';
           $rep_filter = $tar[3] ?? '';
           $rep_label = $tar[4] ?? '';
+
+          if(!empty($rep_label)) $rep_label = astedit::evalValue($rep_label, [$this->id, $rep_id]);
           $rep_title = $tar[5] ?? '';
+          if(!empty($rep_title)) $rep_title = astedit::evalValue($rep_title, [$this->id, $rep_id]);
+
           $this->reports[$rep_id] = [
             'fields' => $rep_fields,
             'filter' => $rep_filter,
             'label' => $rep_label,
             'title' => $rep_title,
           ];
-          if(!empty($rep_label)) {
+          if(is_callable('asteditReport::getReportButtonHtml')) {
+            $reportButton = asteditReport::getReportButtonHtml($this->id, $rep_id, $rep_label,$rep_title);
+          }
+          else {
             # auto-add HTML button on toolbar (for executing report)
             $rTitle = $rep_title ? "title='$rep_title'" : '';
-            $reportButton = "<input type=\"button\" id=\"$rep_id\" class=\"btn btn-primary\" value=\"$rep_label\" "
+            $reportButton = "<input type=\"button\" id=\"$rep_id\" class=\"btn\" value=\"$rep_label\" "
               . "onclick=\"asteditReport.run('$this->id','$rep_id')\" $rTitle/>";
-            $this->toolBar[] = $reportButton;
           }
+          $this->toolBar[] = $reportButton;
           break;
 
         case 'TOOLBAR': # HTML code for toolbar (buttons etc.)
