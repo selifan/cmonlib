@@ -3,8 +3,8 @@
 * @package astedit , Database tables create/upgrade/browse/edit engine  (CRUD++)
 * @name astedit(x).php - main module, classes CFieldDefinition,CIndexDefinition,CTableDefinition
 * @author Alexander Selifonov, < alex [at] selifan dot ru >
-* @Version 1.86.002
-* updated 2025-07-10
+* @Version 1.86.003
+* updated 2025-07-18
 **/
 # error_reporting (E_ALL ^ E_NOTICE);
 # User field types, added by including your own classes
@@ -2139,8 +2139,10 @@ class CTableDefinition
         $ord = empty($cursortord)?' DESC':'';
         return ($cursortfld . $ord);
      }
-     return '';
+
+     return $this->browseorder;
   }
+
   function DrawBrowsePage($ajax=0) {
      global $ast_datarow, $ast_tips, $cursortfld, $cursortord,$as_cssclass,
      $ast_browse_jsdrawn, $astbtn, $ast_parm;
@@ -2173,10 +2175,11 @@ class CTableDefinition
      if(!empty($this->groupby) && !empty($this->sumfields))
        $sqlqry .= ' GROUP BY '.$this->groupby;
 
-     $this->browseorder = $this->prepareOrder();
+
+     $browseorder = $this->prepareOrder();
      # add ORDER BY
-     if(!empty($this->browseorder))
-       $sqlqry .= ' ORDER BY '.$this->browseorder;
+     if(!empty($browseorder))
+       $sqlqry .= ' ORDER BY '.$browseorder;
 
      # add page output - LIMIT nPage, PageSize
      if($this->rpp && empty($this->groupby)){
@@ -2193,6 +2196,7 @@ class CTableDefinition
        echo "<div id='qry'>[debug] query: $sqlqry</div>\n";
      }
      $r_res = Astedit::$db->sql_query($sqlqry); # todo: limit ...
+     # writeDebugInfo("browse qry: ", $sqlqry);
      if(empty($r_res))
      {
          $sqlErr = Astedit::$db->sql_error();
