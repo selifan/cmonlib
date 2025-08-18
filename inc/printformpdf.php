@@ -5,7 +5,7 @@
 * loaded configuration from XML file or string.
 * @uses TCPDF, FPDF, TCPDI classes for reading/writing pdf body, see http://www.tcpdf.org/
 * @Author Alexander Selifonov, <alex [at] selifan {dot} ru>
-* @version 1.87.001-beta 2025-07-17
+* @version 1.87.003 2025-08-14
 * @Link: https://github.com/selifan/prinformpdf
 * @license http://www.opensource.org/licenses/bsd-license.php BSD
 *
@@ -38,7 +38,7 @@ abstract class PfPdfPlugin {
 }
 
 class PrintFormPdf {
-    const VERSION = '1.86.001';
+    const VERSION = '1.87.003';
     const DEFAULT_MARGIN = 5;
     const DEFAULT_GRID_ROWS = 30;
     const DEFAULT_GRID_STEPY = 6;
@@ -605,6 +605,7 @@ class PrintFormPdf {
                     unset($chItem);
                     if(!count($fldArr)) continue; # ignore empty flextable (w/o field list)
                     $headers = [];
+                    $headersFontName = $headersFontSize = $headersBgColor = $headersAllPgs = FALSE;
                     if(isset($item->headers)) {
                         # headers for fields in the table
                         $headersFontName = isset($item->headers['font']) ? (string)$item->headers['font'] : $this->_basepar['font']['name'];
@@ -794,7 +795,7 @@ class PrintFormPdf {
         $flexPage = 0;
         do {
             $arFlexData = $this->_renderFlexTablePage($flexId, $arFlexData,$flexPage);
-
+            if(!$nextPosY) break;
             if(is_array($arFlexData) && count($arFlexData)) {
                 # writeDebugInfo("page: {$this->prnPage}, this: ", $this);
                 $orientation = $this->_basepar['page']['orientation']; # TODO: get from current page
@@ -843,7 +844,22 @@ class PrintFormPdf {
             writeDebugInfo("empty data array");
             return 0;
         }
-        $border = ($this->_evalAttribute($this->_flextables[$flexId]['border']));
+        $TopBorder = TRUE;
+        $borderParams = $this->_flextables[$flexId]['border'] ?? '';
+        if(!empty($borderParams)) {
+            $borderParams = preg_split('/[, ;]/',$borderParams);
+            $bordert = 0.2; # default border thickness
+            # exit(__FILE__ .':'.__LINE__.' flextable borderParams:<pre>' . print_r($borderParams,1) . '</pre>');
+            foreach($borderParams as $bParam) {
+                if(is_numeric($bParam))
+                    $border = ($this->_evalAttribute($bParam));
+                else {
+                    $bpUpper = strtoupper($bParam);
+                    if($bpUpper === 'NOTOP') $TopBorder = FALSE; # don't draw Top border
+                    # TODO: other sub-params for borders
+                }
+            }
+        }
         $padding = floatval($this->_evalAttribute($this->_flextables[$flexId]['padding']));
         $bordercolor = ($this->_evalAttribute($this->_flextables[$flexId]['bordercolor']));
         $borderRGB = empty($bordercolor) ? [0,0,0] : $this->_parseColor($bordercolor);
@@ -939,7 +955,7 @@ class PrintFormPdf {
             }
         }
         else {
-            if($border>0) $this->_pdf->Line($startX,$startY,$endX, $startY); # upper border
+            if($border>0 && $TopBorder) $this->_pdf->Line($startX,$startY,$endX, $startY); # upper border
         }
 
         # Draw data rows
@@ -988,6 +1004,12 @@ class PrintFormPdf {
             }
             # print fields in data row
             foreach($arFields as $no => $fDef) {
+                if(!isset($dataRow[$fldid])) {
+                    writeDebugInfo("no [$fldid] in row: ", $dataRow);
+                    continue;
+                }
+                if(!is_scalar($dataRow[$fldid]))
+                    continue;
                 $fldPosX = $arColumns[$no];
                 $fldid = $fDef['name'];
                 $fsize = $fDef['size'];
