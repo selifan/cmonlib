@@ -5,7 +5,7 @@
 * loaded configuration from XML file or string.
 * @uses TCPDF, FPDF, TCPDI classes for reading/writing pdf body, see http://www.tcpdf.org/
 * @Author Alexander Selifonov, <alex [at] selifan {dot} ru>
-* @version 1.87.003 2025-08-14
+* @version 1.87.005 2025-09-02
 * @Link: https://github.com/selifan/prinformpdf
 * @license http://www.opensource.org/licenses/bsd-license.php BSD
 *
@@ -110,7 +110,7 @@ class PrintFormPdf {
     protected $_img_path = ''; # images folder
     protected $_curSrcPdf = '';
     protected $_curSrcFile = -1, $_curSrcPage=-1, $_curSrcPgcount=-1;
-
+    public $fieldCount = 0;
     protected $_apFields = []; # fields to draw on All Pages
     protected $_apFinally = FALSE; # if TRUE, AllFields should be rendered last
     protected $_apValues = []; # values for All Pages fields
@@ -195,6 +195,7 @@ class PrintFormPdf {
         elseif(is_string($param)) { # configuration XML filename or whole XML string was passed
             $this->_configfile = $param;
         }
+        # writeDebugInfo("this->_configfile: ", $this->_configfile);
         if(!empty($this->_configfile)) {
             $this->homeDir = dirname($this->_configfile) .'/';
             if ($this->_pdf_path == '') $this->_pdf_path = $this->homeDir;
@@ -233,6 +234,7 @@ class PrintFormPdf {
         else $this->_configfile = $cfgname;
 
         $cfgPath = dirname($this->_configfile);
+        # writeDebugInfo("config to parse: ", $this->_configfile);
 
         if(is_callable(self::$debug)) {
             self::$debug(">>> LoadConfig(cfg:'$this->_configfile', subid:'$operSubid') subst: ", $arSubst);
@@ -395,6 +397,7 @@ class PrintFormPdf {
 
         $this->_pagedefs = [];
         $fldcnt = 0;
+        # writeDebugInfo("cur XML ", $this->_configfile);
         foreach($xml->pages->children() as $key => $pageitem) {
             # $pageno = isset($pageitem['number']) ? (int) $pageitem['number'] : $ipage;
             $hide_it = isset($pageitem['hide']) ? (int) $pageitem['hide'] : 0;
@@ -416,19 +419,21 @@ class PrintFormPdf {
                 $addXml = (isset($pageitem['src']) ? (string)$pageitem['src'] : '');
                 if(!empty($operSubid)) $subid = $operSubid; # passed from caller
                 else $subid  = (isset($pageitem['datasubid']) ? (string)$pageitem['datasubid'] : '');
-                /*
+
                 $ifCond = (isset($pageitem['if']) ? (string)$pageitem['if'] : FALSE);
                 if (substr($ifCond,0,1) === '@') $ifCond = substr($ifCond,1);
                 $b_import = TRUE;
+                /*
                 if (!empty($ifCond)) {
                     if(is_callable($ifCond)) {
-                        $b_import = call_user_func($ifCond, $this->dataentity);
+                        $b_import = call_user_func($ifCond); # $this->dataentity
                     }
                     elseif(is_object($this->callbackObj) && method_exists($this->callbackObj, $ifCond)) {
-                        $b_import = $this->callbackObj->$ifCond($this->dataentity);
+                        $b_import = $this->callbackObj->$ifCond(); # $this->dataentity
                     }
-                    # else writeDebugInfo("if=[$ifCond] is not callable nor method of obj ", $this->callbackObj);
+                    writeDebugInfo("do importDef: if=[$ifCond] [$b_import]");
                 }
+                if(!$b_import) continue;
                 */
                 if ( strlen($addXml) ) {
                     $realXml = $this->_evalAttribute($addXml);
@@ -525,7 +530,9 @@ class PrintFormPdf {
                         $newar['type'] = 'plugin';
                     }
                     $this->father->_pagedefs[$ipage]['fields'][] = $newar;
-                    $fldcnt++;
+
+                    ++$fldcnt;
+                    ++$this->father->fieldCount;
                 }
                 elseif($key=='datagrid') {
                     $dtfields = isset($item['fields']) ? (string) $item['fields'] : '';
@@ -761,7 +768,7 @@ class PrintFormPdf {
                 }
             }
         }
-        if(!$fldcnt) {
+        if($this->father->fieldCount==0) {
             $this->_errormessage = 'No valid workpage definitions found (no fields defined)!';
             $ret = false;
         }
@@ -1005,7 +1012,7 @@ class PrintFormPdf {
             # print fields in data row
             foreach($arFields as $no => $fDef) {
                 if(!isset($dataRow[$fldid])) {
-                    writeDebugInfo("no [$fldid] in row: ", $dataRow);
+                    if(self::$debug) writeDebugInfo("flextable/no [$fldid] in row: ", $dataRow);
                     continue;
                 }
                 if(!is_scalar($dataRow[$fldid]))
@@ -1228,6 +1235,7 @@ class PrintFormPdf {
           ,'charstep'=> (isset($parm['charstep']) ? (float)$parm['charstep'] : 0)
           ,'maxlength'=> (isset($parm['maxlength']) ? (int)$parm['maxlength'] : 0)
           ,'width'   => (isset($parm['width']) ? floatval($parm['width']) : 0)
+          ,'pspace'   => (isset($parm['pspace']) ? floatval($parm['pspace']) : 0) # Prepend Space chars amount
           ,'font'    => (isset($parm['font']) ? (string)($parm['font']) : '')
           ,'fontstyle' => (isset($parm['fontstyle']) ? (string)($parm['fontstyle']) : '')
 
@@ -1430,6 +1438,7 @@ class PrintFormPdf {
           ,'maxlength'=> (isset($item['maxlength']) ? (int)$item['maxlength'] : 0)
           ,'width'   => (isset($item['width']) ? (float) $item['width'] : 0)
           ,'height'  => (isset($item['height']) ? (float) $item['height'] : 0)
+          ,'pspace'  => (isset($item['pspace']) ? (float) $item['pspace'] : 0) # spaces before text
           ,'font'    => (isset($item['font']) ? (string) $item['font'] :'')
           ,'fontstyle' => (isset($item['fontstyle']) ? (string) $item['fontstyle'] :'')
           ,'size'    => (isset($item['size']) ? (float) $item['size'] : 0)
@@ -1496,7 +1505,7 @@ class PrintFormPdf {
         if ($debug) self::$debug = $debug;
         if(is_callable(self::$debug)) self::$debug(">>>>> start renering pages\n---------------------------------------");
         if(count($this->_pagedefs)<1 && $this->_specialPages==0) {
-            $this->_errormessage = 'Configuration not loaded, Rendering impossible !';
+            $this->_errormessage = 'Configuration has no configured pages, Rendering impossible';
             return false;
         }
 
@@ -1518,7 +1527,7 @@ class PrintFormPdf {
         }
         if(!$this->_pdf) $this->_createPdfObject();
 
-        if(!($this->_createPdfObject())) {
+        if(!$this->_pdf) { # $this->_createPdfObject()
             if (is_callable(self::$debug)) self::$debug("PDF object not created");
             return false;
         }
@@ -2455,6 +2464,7 @@ class PrintFormPdf {
         $fldtype = isset($fcfg['type']) ? $fcfg['type'] : '';
         $posx = empty($fcfg['posx']) ? array(0) : $fcfg['posx'];
         $posy = empty($fcfg['posy']) ? 0 : $fcfg['posy'];
+        $pspace = empty($fcfg['pspace']) ? 0 : $fcfg['pspace'];
 
         # auto-adjust zero width and height
         if($width<=0 && $fldtype!=='image') {
@@ -2585,6 +2595,10 @@ class PrintFormPdf {
                 if($align==='J' &&  self::$autoLFJustify) {
                     $lastChar = mb_substr($vUtf,-1,NULL,'UTF-8');
                     if($lastChar != "\n") $vUtf .= "\n"; # avoid stupid shrinking of last line in Justified text
+                }
+                if($pspace > 0) {
+                    $vUtf = str_repeat(' ',$pspace) . $vUtf;
+                    # exit("pspace $pspace added:<pre>---$vUtf---</pre>");
                 }
                 $this->_pdf->MultiCell($width,$height,$vUtf, $border, $align, 0, 1, ($posx[0]+$this->offsets[0]),
                   ($posy+$this->offsets[1]), TRUE,0,false,TRUE,$height,$valign, $fitCell);
@@ -3044,7 +3058,7 @@ class PrintFormPdf {
     */
     protected function _createPdfObject() {
 
-        if(is_object($this->_pdf)) return true;
+        if(is_object($this->_pdf)) return TRUE;
         try {
             $this->_pdf = new TCPDI($this->_basepar['page']['orientation'],$this->_basepar['page']['units'],$this->_basepar['page']['size']);
             # $this->_pdf = new FPDI($this->_basepar['page']['orientation'],$this->_basepar['page']['units'],$this->_basepar['page']['size']);
@@ -3124,7 +3138,6 @@ class PrintFormPdf {
             elseif( is_object($this->callbackObj) && method_exists($this->callbackObj, $ret) ) {
                 return $this->callbackObj->$ret($data);
             }
-
         }
         return $ret;
     }
