@@ -3,7 +3,7 @@
 * @package ALFO
 * @name jsvc/alfoservices.php
 * ALFO JSON API
-* @version 1.17.001 2025-06-02
+* @version 1.19.001 2025-09-19
 * Обертки для вызова через API методов расчета, сохранения полиса, получения PDF форм из модулей ALFO
 * Системные меж-серверные запросы - справочники, курсы валют и т.п.
 */
@@ -24,12 +24,18 @@ class AlfoServices {
     const ERR_WRONG_MODULE = '1100';
     const CURRATES_LIMIT = 100; # лимит на одноразовое кол-во передаваемых курсов валют
 
+    static $notLoggedFunctions = ['getTranches','periodStats','getResource',
+      'getCurrencyRates','decodePolicyQrCode','findDmsPolicy'
+    ]; # вызовы этих методов не логировать!
+
+    private static $cutLong = 0; # длина обрезки больших строк в массивах при сохранении
+    private static $tokenLogging = FALSE;
     static $SYSTEM_TOKEN = 'sys_0327834687';
     static $SYSTEM_USERID= '1';
     static $FREE_USER_ID = -1000; # userID, назначаемый при вызове без токена
     static $freeAccessFunc = ['decodePolicyQrCode', ]; # ф-ции не требующие userToken
 
-    static private $hideFuncs = ['init','setRawRequest','getRawRequest','prepareBaseParams'];
+    static private $hideFuncs = ['init','setRawRequest','getRawRequest','prepareBaseParams','getAppConfigValues'];
     protected $_rawRequest = '';
     static $encodeResponse = FALSE; // кодировать ли ответ с помощью utf8_encode()
     static $busCall = FALSE; # станет TRUE если запрос пришел от шины ( init() )
@@ -38,12 +44,12 @@ class AlfoServices {
     static $verbose = 0; # включение отладочного вывода на экран
     static $logCommands = 0; # 1|TRUE = все переданные вызовы с параметрами логировать в _debuginfo.log
     private $plgBackend = null; // будет занесена ссылка на бакенд нужного плагина
+    private static $userid = FALSE;
     static $module = '';
+    private static $logApi = 0;
+    private static $inputParams = FALSE;
     # функции конвертации параметров перед вызовами ф-ций в опр.модулях
     static $callMap = [ #
-       'trmig' => [
-         'prepareParameters' => 'trmigMakeParams' # конвертация параметров для модуля мигрантов
-       ],
     ];
     # маппинг имен функций - из "внешнего" (вызванного метода в API) во внутренний в нужном модуле
     static $funcMap = [
@@ -126,56 +132,10 @@ class AlfoServices {
            'baseactive' => ['baseactive', '1'], # Базовый актив, значение по умолч, если не передали
         ],
 
-        'trmig' => [ # ДМС стр.мигрантов
-          'inn' => 'inn',
-          'policyid' => 'stmt_id', # обновление ранее созданного, если передан
-          'vakcina' => ['vakcina', '0'],
-          'old_insured' => ['old_insured','0'],
-          'ph_type' => ['insurer_type', 2],
-          'ph_ulname' => 'insrurname',
-          'ph_inn' => 'insrurinn',
-          'ph_ogrn' => 'insrogrn',
-          'ph_kpp' => 'insrkpp',
-          'ph_bankname' => 'ul_bankname',
-          'ph_bankbik' => 'ul_bankbik',
-          'ph_bankrs' => 'ul_bankrs',
-          'ph_bankks' => 'ul_bankks',
-          'ph_docser' => 'insrdocser',
-          'ph_docno' => 'insrdocno',
-          'ph_docdate' => 'insrdocdate',
-          'ph_docissued' => 'insrdocissued',
-          'ph_phone' => 'insrphone',
-          'ph_phone2' => 'insrphone2',
-          'ph_email' => 'insremail',
-          'ph_addressreg'  => 'insradr_full',
-          'ph_sameaddr' => 'insrsameaddr',
-          'ph_addressfact' => 'insrfadr_full',
-          'ph_headduty' => 'ul_head_duty',
-          'ph_headname' => 'ul_head_name',
-          'ph_headbase' => 'ul_osnovanie',
-          'contact_name' => 'ul_contact_fio',
-          'contact_birth' => 'ul_contact_birth',
-          'contact_sex' => 'ul_contact_sex',
-          'contact_address' => 'ul_contact_address',
-          'contact_phone' => 'ul_contact_phone',
-          'contact_email' => 'ul_contact_email',
-          'paydocno' => 'platno', # при простанове оплаты- номер квитанции/плат.документа
-          'payedsum' => 'pay_rur', # при простанове сумма премии в рублях
-          'ikp_agent' => 'ikp_agent',
-          'ikp_curator' => 'ikp_curator',
-        ]
     ];
 
     public static $svcLastError = '';
 
-    # Маппинг файлов, обрабатывающих запросы для отдельных плагинов
-    static $moduleMappings = [
-      'trmig' => 'jsvc_trmig',
-      'imutual' => 'jsvc_imutual',
-      'boxprod' => 'jsvc_boxprod',
-      # 'madms' => 'jsvc_dms', # TODO: jsvc_dms.php - можно сделать один общий модуль-обработчик запросов на ВСЕ ДМС плагины
-      # ...
-    ];
     # запоминаю "сырой" блок данных из запроса (json)
     public function setRawRequest($strg) {
         $this->_rawRequest = $strg;
@@ -220,65 +180,19 @@ class AlfoServices {
         }
     }
     /**
-    * преобраз-е параметров из асс.массива к виду, нужному в модуле trmig
-    * @param mixed $orig исходные параметры
-    * @return array - подготовленные для вызова в модуле
-    */
-    public static function trmigMakeParams($orig) {
-        if (self::$debug) writeDebugInfo("orig params: ", $orig);
-        $ret = [
-            'datefrom' => (isset($orig['params']['datefrom']) ? to_date($orig['params']['datefrom']) : ''),
-            'datetill' => (isset($orig['params']['datetill']) ? to_date($orig['params']['datetill']) : ''),
-        ];
-        self::prepareBaseParams($ret, 'trmig', $orig['params']);
-        /*
-        foreach(self::$fieldMapProd['trmig'] as $web => $fld) {
-            $outname = is_array($fld) ? $fld[0] : $fld;
-            $default = isset($fld[1]) ? $fld[1] : NULL;
-            if (isset($orig['params'][$web]) && is_scalar($orig['params'][$web]) )
-                $ret[$outname] = $orig['params'][$web];
-            elseif($default!==NULL) $ret[$outname] = $default;
-        }
-        */
-        if (isset($orig['params']['insuredlist']) && is_array($orig['params']['insuredlist'])) {
-            foreach($orig['params']['insuredlist'] as $item) {
-                $ret['insdbirth'][] = isset($item['birth'])? $item['birth'] : '';
-                $ret['insdlastname'][] = isset($item['lastname'])? $item['lastname'] : '';
-                $ret['insdfirstname'][] = isset($item['firstname'])? $item['firstname'] : '';
-                $ret['insdmidname'][] = isset($item['midname'])? $item['midname'] : '';
-                $ret['insdfullname_lat'][] = isset($item['fullname_lat'])? $item['fullname_lat'] : '';
-                $ret['insdsex'][] = isset($item['sex'])? $item['sex'] : 'M';
-                $ret['insdrez_country'][] = isset($item['rez_country'])? $item['rez_country'] : '';
-                $ret['insdinn'][] = isset($item['inn'])? $item['inn'] : '';
-                $ret['insddocser'][] = isset($item['docser'])? $item['docser'] : '';
-                $ret['insddocno'][] = isset($item['docno'])? $item['docno'] : '';
-                $ret['insddocdate'][] = isset($item['docdate'])? $item['docdate'] : '';
-                $ret['insddocissued'][] = isset($item['docissued'])? $item['docissued'] : '';
-                $ret['insdmigcard_ser'][] = isset($item['migcard_ser'])? $item['migcard_ser'] : '';
-                $ret['insdmigcard_no'][] = isset($item['migcard_no'])? $item['migcard_no'] : '';
-                $ret['insddocfrom'][] = isset($item['docfrom'])? $item['docfrom'] : '';
-                $ret['insddoctill'][] = isset($item['doctill'])? $item['doctill'] : '';
-                $ret['insdphone'][] = isset($item['phone'])? $item['phone'] : '';
-                $ret['insdemail'][] = isset($item['email'])? $item['email'] : '';
-                $ret['insdaddress'][] = isset($item['address'])? $item['address'] : '';
-                $ret['insdwork_duty'][] = isset($item['work_duty'])? $item['work_duty'] : '';
-                $ret['insdwork_company'][] = isset($item['work_company'])? $item['work_company'] : '';
-            }
-        }
-        return $ret;
-    }
-    /**
     * Общая точка входа - исполнение всех ф-ций
     *
     * @param array $params
     */
     public function execute($params) {
+        self::$inputParams = $params;
         $execFunc = isset($params['execFunc']) ? $params['execFunc'] : '';
         $serialize = $params['serialize'] ?? $params['params']['serialize'] ?? FALSE;
-        # writeDebugInfo("$execFunc, serialize=[$serialize]");
-        if (is_file(__DIR__ . '/_debug.flag')) self::$debug = 1;
-        else self::$debug = AppEnv::getConfigValue('z_debug_jsvc');
-
+        # writeDebugInfo("$execFunc, serialize=[$serialize] ", $params);
+        if(!self::$debug) {
+            if (is_file(__DIR__ . '/_debug.flag')) self::$debug = 1;
+            else self::$debug = AppEnv::getConfigValue('z_debug_jsvc');
+        }
         # if (is_file(__DIR__ . '/_verbose.flag')) self::$verbose = 1;
         if (self::$logCommands) writeDebugInfo("execute params: ", $params);
         if (self::$debug>=2) {
@@ -292,14 +206,22 @@ class AlfoServices {
             if (self::$debug) writeDebugInfo("KT1 - start execute/$execFunc, params ", $params);
         }
         if (self::$verbose) echo 'start execute/$execFunc, params; <pre>' . print_r($params,1). '</pre>';
-        $token = $params['userToken'];
+        $token = $params['userToken'] ?? '';
         $uid = isset($params['uid']) ? $params['uid'] : FALSE;
         $module = $params['module'] ?? $params['params']['module'] ?? '';
-
+        # if(empty($module)) writeDebugInfo("no module, params: ", $params);
         if(self::$debug) writeDebugInfo("module from params : [$module], self:module: ", self::$module);
         if(empty($module)) $module = self::$module;
         $result = $this->init($token, $uid, $module, $execFunc);
+        # writeDebugInfo("init done, result:", $result);
+        if(is_array($result) && isset($result['result']) && $result['result']=='ERROR') {
+            return $result;
+        }
         $executed = FALSE;
+        if(in_array($execFunc, self::$notLoggedFunctions)) self::$logApi = FALSE;
+        else self::$logApi = self::$tokenLogging ? AppEnv::getConfigValue('alfo_api_logging') : FALSE;
+
+        $logId = (self::$logApi ? self::logEventIn($module, $execFunc) : FALSE);
 
         if (empty($execFunc)) {
             $result = [
@@ -308,27 +230,36 @@ class AlfoServices {
                 'message' => 'Не указана вызываемая функция/команда (execFunc)',
             ];
             $executed = TRUE;
+            if($logId) self::logEventOut($logId, $result);
         }
-
-        if(!empty(self::$moduleMappings[$module])) {
-            # $handlerFile = __DIR__ . '/' . self::$moduleMappings[$module];
-            $handlerClass = "\\jsvc\\" . self::$moduleMappings[$module];
-            $jsvcHandler = new $handlerClass;
-            $result = $jsvcHandler->executeRequest($params);
+        if(!$executed && !empty($module)) {
+            if(is_file(__DIR__ . "/jsvc_{$module}.php")) {
+                # в папке есть стандартный модуль обработчик для плагина - jsvc_{module}.php
+                $handlerClass = "\\jsvc\\jsvc_".$module;
+                $jsvcHandler = new $handlerClass;
+                $result = $jsvcHandler->executeRequest($params);
+                $executed = TRUE;
+            }
+        }
+        # последний шанс - ищу метод среди "общих" для всех - в этом классе
+        if(!$executed && method_exists($this, $execFunc)) {
+            $exeParams = $params['params'] ?? $params;
+            $result = $this->$execFunc($exeParams);
             $executed = TRUE;
-            # writeDebugInfo("result from called $module : ", $result);
-            # return $result;
         }
-        if (self::$verbose) echo "$module/initialization result <pre>" . print_r($result,1). '</pre>';
 
-        if (is_array($result) && !empty($result['errorCode']))
+        # if (self::$verbose) echo "$module/initialization result <pre>" . print_r($result,1). '</pre>';
+        if($executed && $logId) self::logEventOut($logId, $result);
+
+        if ($executed && is_array($result) && !empty($result['errorCode'])) {
             return $result; # ERROR detected
-
+        }
         if(!$executed) {
             # запрос из справочника стран
             if(strtolower($execFunc) === 'getcountrylist') {
                 $data = PlcUtils::getCountryList();
                 $result = ['result'=>'OK', 'data' => $data ];
+                if($logId) self::logEventOut($logId, $result);
                 if($serialize) $result['data'] = self::serializeData($result['data'], $serialize);
 
                 return $result;
@@ -356,6 +287,7 @@ class AlfoServices {
             if (empty($module) && method_exists($this, $execFunc)) {
                 # функция общего типа, не из плагинов, декларирована здесь же
                 $result = $this->$execFunc($funcParams);
+                if($logId) self::logEventOut($logId, $result);
                 # writeDebugInfo("called $execFunc with params: ", $funcParams);
             }
             elseif (method_exists($this->plgBackend, $execFunc)) {
@@ -364,6 +296,7 @@ class AlfoServices {
                 ob_start();
                 $result = $this->plgBackend->$execFunc($funcParams);
                 $echoed = ob_get_flush();
+                if($logId) self::logEventOut($logId, $result);
                 if ($echoed !=='') writeDebugInfo("calling service was echoed with: ", $echoed);
                 if (self::$verbose) echo "KT50: $execFunc result <pre>" . print_r($result,1). '</pre>';;
 
@@ -378,6 +311,7 @@ class AlfoServices {
             }
             else {
                 $result = ['result'=>'ERROR', 'errorCode' => self::ERR_WRONG_FNCTION, 'message'=>'Запрос неизвестного метода '.$execFunc, 'params'=>$funcParams];
+                if($logId) self::logEventOut($logId, $result);
                 if (self::$verbose) echo "KT51: $execFunc - undefined func in module<br>";
             }
         }
@@ -396,6 +330,60 @@ class AlfoServices {
         if(self::$debug) writeDebugInfo("KT50 - execution $execFunc result: ", $result, " trace: ", debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 3));
 
         return $result;
+    }
+    # логирую старт события
+    public static function logEventIn($module,$exeFunc) {
+        $arDta = [
+          'evdate_in' =>'{now}',
+          'module' => (string)$module,
+          'ev_action' => (string)$exeFunc,
+          'ip_address'=> ($_SERVER['REMOTE_ADDR'] ?? 'undef'),
+          'userid' => self::$userid,
+        ];
+        $ret = \AppEnv::$db->insert(PM::T_APILOG, $arDta);
+        if(self::$logApi>=10) { # полное хранение запроса
+            $folder = \AppEnv::getAppFolder('applogs/');
+            $longId = str_pad($ret,8,'0',STR_PAD_LEFT);
+            $inFile = "api-$longId-in.log";
+            file_put_contents($folder.$inFile, print_r(self::array_shorten_strings(self::$inputParams,self::$cutLong),1));
+        }
+        return $ret;
+    }
+    # логирую выход из события
+    public static function logEventOut($logEventId, $result) {
+        if(is_numeric($logEventId) && $logEventId>0) {
+            # writeDebugInfo("result: ", $result);
+            $outRes = is_array($result) ? ($result['result'] ?? 'undef') : (string)$result;
+            if($outRes !== 'OK' && isset($result['message']))
+                $outRes .= ": " . $result['message'];
+            if(isset($result['data']['is_blocked'])) {
+                if($result['data']['is_blocked'] >0) {
+                    $outRes .= " Блокировка, причины:";
+                    $arReasons = [];
+                    if(!empty($result['data']['sanction'])) $arReasons[]="санкции";
+                    if(!empty($result['data']['terrorist'])) $arReasons[] = " террорист";
+                    if(!empty($result['data']['blocked'])) $arReasons[] = " по-суду";
+                    if(!empty($result['data']['country'])) $arReasons[] = " страна";
+                    if(!empty($result['data']['badpassport'])) $arReasons[]= " паспорт";
+                    if(!empty($result['data']['blacklist'])) $arReasons[] =" списки-СБ";
+                    $outRes .= implode(',',$arReasons);
+                }
+                else $outRes .= " Проверка комплаенс пройдена";
+            }
+            $arDta = [
+              'evdate_out'=>'{now}',
+              'outresult' => $outRes
+            ];
+            $ret = \AppEnv::$db->update(PM::T_APILOG, $arDta,['eventid'=>$logEventId]);
+            if(self::$logApi>=10) { # полное хранение запроса
+                $folder = \AppEnv::getAppFolder('applogs/');
+                $longId = str_pad($logEventId,8,'0',STR_PAD_LEFT);
+                $outFile = "api-$longId-out.log";
+                file_put_contents($folder.$outFile, print_r(self::array_shorten_strings($result,self::$cutLong),1));
+            }
+        }
+        else $ret = FALSE;
+        return $ret;
     }
     /**
     * превращаю массив в строку
@@ -438,7 +426,6 @@ class AlfoServices {
     */
     private function init($userToken, $Uid = '', $module='', $function = '') {
         if (self::$debug) WriteDebugInfo("init($userToken, ($Uid), module='$module', func=$function)");
-        include_once(__DIR__ . '/../svc/alfo_dataclasses.php');
         /*
         $busAddr = explode(',', appEnv::getConfigValue('bus_ip_address'));
         $pluginId = $module;
@@ -468,7 +455,6 @@ class AlfoServices {
                     'errorCode' => self::ERR_USRTOKEN_NOT_PASSED,
                     'message' => 'User Token not passed'
                 ];
-                # throw  new SoapFault(self::ERR_USRTOKEN_NOT_PASSED, "User Token not passed, your IP: ".$_SERVER['REMOTE_ADDR']);
             }
             if ($userToken === self::$SYSTEM_TOKEN) {
                 # системный токен, все запросы включая служебные
@@ -487,8 +473,8 @@ class AlfoServices {
                     'errorCode' => self::ERR_USRTOKEN_WRONG,
                     'message' => 'Wrong User Token'
                 ];
-                ## throw  new SoapFault(self::ERR_USRTOKEN_WRONG, "Wrong User Token");
             }
+
             if(intval($usr['active_till'])>0 && $usr['active_till']<date('Y-m-d'))
                 return [ 'result' => 'ERROR',
                     'errorCode' => self::ERR_USRTOKEN_EXPIRED,
@@ -498,7 +484,7 @@ class AlfoServices {
             if(intval($usr['active_from'])>0 && $usr['active_from']>date('Y-m-d'))
                 return [ 'result' => 'ERROR',
                     'errorCode' => self::ERR_USRTOKEN_NOTACTIVE,
-                    'message' => 'User Token is not active yet'
+                    'message' => 'User Token is not active'
                 ];
 
             if (!empty($usr['ip_addresses'])) {
@@ -510,6 +496,7 @@ class AlfoServices {
                     ];
                 }
             }
+            self::$tokenLogging = $usr['b_logging'] ?? FALSE;
         }
         //...
         # WriteDebugInfo("final user id: $usr[userid]");
@@ -535,6 +522,7 @@ class AlfoServices {
                 return ['result'=>'ERROR', 'errorCode' => self::ERR_WRONG_UID, 'message'=>"Wrong User Id passed"];
             }
         }
+        self::$userid = $userid;
         appEnv::setApiCall($userid);
 
         $bkend = FALSE;
@@ -544,6 +532,7 @@ class AlfoServices {
             if (!isset(appEnv::$_plugins[$module])) {
                 include_once(__DIR__ . '/mapper.php');
                 $bkend = ProdMap::getEngine($module);
+                # writeDebugInfo("module: $module, backend: ", get_class($bkend));
                 if ($bkend) {
                     if (is_string($bkend) && isset(appEnv::$_plugins[$bkend])) {
                         $pluginId = $bkend;
@@ -585,56 +574,12 @@ class AlfoServices {
      * @return FileResponse file name and body OR error message
      */
     public function getBinaryFile($params) {
-        $ret = new FileResponse;
-        $ret->result = '1';
-        $ret->fileName='test.txt';
-        $ret->body = base64_encode("Это простой тестовый файл\r\nСтрока от юзера:$params"); # base64_encode - вызовет сам phpwsdl!
+        $ret = [];
+        $ret['result'] = '1';
+        $ret['fileName'] ='test.txt';
+        $ret['body'] = base64_encode("Это простой тестовый файл\r\nСтрока от юзера:$params"); # base64_encode - вызовет сам phpwsdl!
         return $ret;
     }
-
-    /**
-    * @pw_set nillable=false $params is NOT null
-    * @pw_element AuthByPhoneParams $params
-    * @return stringArray
-    */
-    function AuthByPhone($params) {
-
-        include_once(__DIR__ . '/clientV7/helper.php');
-
-        $ret = new StdResponse();
-        $phone = isset($params->MobilePhone) ? $params->MobilePhone : null;
-        if (!$phone) {
-            $ret->result = 'ERROR';
-            $ret->message = 'Нет данных';
-        } else {
-            $userId = Helper::getIdByPhone($phone);
-            if ($userId === false) {
-                $ret->result = 'ERROR';
-                $ret->message = 'Пользователь не найден';
-            } else {
-                $helper = new Helper($userId);
-                $data = [];
-
-                $this->init(null, $userId);
-                $data['Uid'] = $userId;
-
-                $role = $helper->getRole();
-                if ($role === false) {
-                    $ret->result = 'ERROR';
-                    $ret->message = 'Ошибка доступа';
-                } else {
-                    $data['UserProfile'] = $helper->getUserProfile();
-                    $data['Role'] = $helper->getRole();
-                    $data['UserClients'] = $helper->getClients();
-
-                    $ret->result = 'OK';
-                    $ret->data = $data;
-                }
-            }
-        }
-        return $ret;
-    }
-
 
     /**
     * @pw_set nillable=false $params is NOT null
@@ -642,7 +587,7 @@ class AlfoServices {
     * @return stringArray
     */
     function GetApplNumb($params) {
-        $uid = isset($params->Uid) ? $params->Uid : '';
+        $uid = $params['Uid'] ?? $params['userid'] ?? '';
         $module = $params['module'] ?? 'none';
         $deptid = $params['deptid'] ?? 0;
         if(!$deptid && $uid > 0) $deptid = \AppEnv::$db->select(\PM::T_USERS, ['where'=>['usrid'=>$uid],
@@ -656,15 +601,15 @@ class AlfoServices {
                 $codir = PolicyModel::$plc_plugins[$prodCode]['subtypes'][0];
         }
         $nextNo = \NumberProvide::getNext($codir, $deptid, $module);
-        $ret = new StdResponse();
+        $ret = [];
         if ( $nextNo >0 ) {
             $data = ['Uid' => $uid, 'ProductType' => $prodCode, 'Application_number' => $nextNo];
-            $ret->result = 'OK';
-            $ret->data = $data;
+            $ret['result'] = 'OK';
+            $ret['data'] = $data;
         }
         else {
-            $ret->result = 'ERROR';
-            $ret->message = $this->getError();;
+            $ret['result'] = 'ERROR';
+            $ret['message'] = $this->getError();;
             #$ret['error'] = $this->getError();
             # $ret['message'] = appEnv::getSvcLastError();
         }
@@ -693,14 +638,13 @@ class AlfoServices {
         # chdir(ALFO_ROOT);
         $bkRet = $this->plgBackend->print_pack();
 
-        $ret = new StdResponse('OK',
-            'Файл получен в виде BASE64 кодированной строки'
-        );
-        if (isset($bkRet['result'])) $ret->result = $bkRet['result'];
-        if (isset($bkRet['message'])) $ret->message = $bkRet['message'];
+        $ret = ['result'=>'OK'];
+
+        if (isset($bkRet['result'])) $ret['result'] = $bkRet['result'];
+        if (isset($bkRet['message'])) $ret['message'] = $bkRet['message'];
         if (isset($bkRet['filepath'])) {
-            $ret->data['filename'] = basename($bkRet['filepath']);
-            $ret->data['filebody'] = base64_encode(file_get_contents($bkRet['filepath']));
+            $ret['data']['filename'] = basename($bkRet['filepath']);
+            $ret['data']['filebody'] = base64_encode(file_get_contents($bkRet['filepath']));
             if (self::$autoDeleteTmpfiles) @unlink($bkRet['filepath']);
         }
         return $ret;
@@ -722,10 +666,10 @@ class AlfoServices {
     public function getPolicyList($userToken, $Uid, $programId, $clientId){
         # $userToken = isset($params->userToken) ? $params->userToken : '';
         $connected = $this->init($userToken, $Uid);
-        $ret = new PolicyListResponse;
+        $ret = [];
         if (appEnv::isClientCall()) {
-            $ret->result = 'ERROR';
-            $ret->message = 'Вызов для неавторизованного клиента неприменим';
+            $ret['result'] = 'ERROR';
+            $ret['message'] = 'Вызов для неавторизованного клиента неприменим';
             return $ret;
         }
 
@@ -740,17 +684,17 @@ class AlfoServices {
         ]);
 
         if (is_array($dta)) {
-            $ret->result = 'OK';
+            $ret['result'] = 'OK';
             foreach($dta as &$row) {
                 $row['datefrom'] = to_char($row['datefrom']);
                 $row['datetill'] = to_char($row['datetill']);
                 $row['datePay'] = intval($row['datePay']) ? to_char($row['datePay']) : '';
             }
-            $ret->data = $dta;
+            $ret['data'] = $dta;
         }
         else {
-            $ret->result = 'ERROR';
-            $ret->message = 'Нет данных';
+            $ret['result'] = 'ERROR';
+            $ret['message'] = 'Нет данных';
         }
         return $ret;
     }
@@ -764,24 +708,23 @@ class AlfoServices {
     * @return StdResponse
     */
     public function getEventLog($params = FALSE) {
-        include_once(__DIR__ . '/../svc/alfo_dataclasses.php');
         $userToken = $params['userToken'] ?? '';
         $Uid = $params['userid'] ?? '';
         # $connected = $this->init($userToken, $Uid, '', __FUNCTION__);
         if (self::$debug) writeDebugInfo(__FUNCTION__, " start, params: ", $params);
-        $ret = new StdResponse('OK');
+        $ret = ['result' => 'OK'];
         $PageNo = $params['params']['page'] ?? $params['page'] ?? 0; # max(0,$PageNo);
         $rowCount = $params['params']['rows'] ?? $params['rows'] ?? 20; # min(100, max(10,$rowCount));
         $PageNo = max(0,$PageNo);
         $rowCount = min(100, max(1,$rowCount));
 
         $offset = $rowCount * $PageNo;
-        $ret->data = AppEnv::$db->select(PM::T_EVENTLOG, ['fields'=>"DATE_FORMAT(evdate,'%d.%m.%Y %H:%i') evdate,evtype,ipaddr,userid,itemid,'' username,evtext",
+        $ret['data'] = AppEnv::$db->select(PM::T_EVENTLOG, ['fields'=>"DATE_FORMAT(evdate,'%d.%m.%Y %H:%i') evdate,evtype,ipaddr,userid,itemid,'' username,evtext",
           'offset'=>$offset, 'rows'=>$rowCount, 'orderby'=>'evid DESC'
         ]);
         # if (self::$debug) writeDebugInfo("event SQL ", AppEnv::$db->getLastQuery());
-        # if (self::$debug>1) writeDebugInfo("event data ", $ret->data);
-        if(is_array($ret->data)) foreach($ret->data as &$row) {
+        # if (self::$debug>1) writeDebugInfo("event data ", $ret['data']);
+        if(is_array($ret['data'])) foreach($ret['data'] as &$row) {
             if($row['userid'] > 0) $row['username'] = CmsUtils::getUserFullname($row['userid']);
         }
         return $ret;
@@ -794,52 +737,52 @@ class AlfoServices {
     * @since 2024-12-18
     */
     public function getPolicyByNo($params = FALSE) {
-        include_once(__DIR__ . '/../svc/alfo_dataclasses.php');
+
         $userToken = $params['userToken'] ?? '';
         $Uid = $params['userid'] ?? '';
         # $connected = $this->init($userToken, $Uid, '', __FUNCTION__);
         if (self::$debug) writeDebugInfo(__FUNCTION__, " start, params: ", $params);
-        $ret = new StdResponse('OK');
+        $ret = [ 'result'=>'OK' ];
         $pNo = $params['params']['policyno'] ?? $params['policyno'] ?? ''; # max(0,$PageNo);
         $bRisks = $params['params']['risks'] ?? $params['risks'] ?? 0; # включить риски
         # writeDebugInfo("policy=$pNo, risks=[$bRisks]");
-        $ret->data = AppEnv::$db->select(PM::T_POLICIES, [
+        $ret['data'] = AppEnv::$db->select(PM::T_POLICIES, [
           'fields'=>"stmt_id,policyno,module,metatype,datefrom,datetill,module,programid,subtypeid,term,termunit,policy_prem,currency,datepay,tranchedate,stateid",
           'where'=> ['policyno'=>$pNo], 'singlerow'=>1,
         ]);
-        # writeDebugInfo("seek by $pNo: ", $ret->data);
-        $plcid = $ret->data['stmt_id'] ?? 0;
-        if(!empty($ret->data['module'])) {
-            if($ret->data['module'] == \PM::INVEST2) {
+        # writeDebugInfo("seek by $pNo: ", $ret['data']);
+        $plcid = $ret['data']['stmt_id'] ?? 0;
+        if(!empty($ret['data']['module'])) {
+            if($ret['data']['module'] == \PM::INVEST2) {
                 # дополнительно передаю инфу о кодировке (коэф-ты РПФ,ГФ,РВД
-                $codeDta = AppEnv::$db->select('invins_subtypes', ['where'=>['id'=>$ret->data['subtypeid']],'singlerow'=>1]);
+                $codeDta = AppEnv::$db->select('invins_subtypes', ['where'=>['id'=>$ret['data']['subtypeid']],'singlerow'=>1]);
                 if(isset($codeDta['part_gf'])) {
-                    $ret->data['part_gf'] = $codeDta['part_gf'];
-                    $ret->data['part_rf'] = $codeDta['part_rf'];
-                    $ret->data['rvd'] = $codeDta['rvd'];
+                    $ret['data']['part_gf'] = $codeDta['part_gf'];
+                    $ret['data']['part_rf'] = $codeDta['part_rf'];
+                    $ret['data']['rvd'] = $codeDta['rvd'];
                 }
             }
-            elseif($ret->data['module'] == 'imutual') {
+            elseif($ret['data']['module'] == 'imutual') {
                 # перенесли ДСЖ в отдельный модуль - imutual, там сразу считается ПИФ часть и заносится в calc_params
                 $spec = PlcUtils::loadPolicySpecData($plcid);
                 if(is_array($spec['calc_params']))
-                    $ret->data = array_merge($ret->data, $spec['calc_params']);
+                    $ret['data'] = array_merge($ret['data'], $spec['calc_params']);
                 # writeDebugInfo("imutual spec data: ", $spec);
             }
         }
 
-        $plcid =  $ret->data['stmt_id'] ?? 0;
+        $plcid =  $ret['data']['stmt_id'] ?? 0;
         if($plcid && $bRisks) {
             $risks = AppEnv::$db->select(PM::T_AGRISKS, ['where'=>['stmt_id'=>$plcid], 'fields'=>'rtype,riskid,risksa,riskprem,datefrom,datetill','orderby'=>'id']);
             if(is_array($risks) && count($risks))
-            $ret->data['risks'] = $risks;
+            $ret['data']['risks'] = $risks;
 
         }
         # if (self::$debug) writeDebugInfo("event SQL ", AppEnv::$db->getLastQuery());
-        # if (self::$debug>1) writeDebugInfo("event data ", $ret->data);
-        if(!is_array($ret->data) || !count($ret->data)) {
-            $ret->result = 'ERROR';
-            $ret->message = 'Данные по номеру не найдены';
+        # if (self::$debug>1) writeDebugInfo("event data ", $ret['data']);
+        if(!is_array($ret['data']) || !count($ret['data'])) {
+            $ret['result'] = 'ERROR';
+            $ret['message'] = 'Данные по номеру не найдены';
         }
         return $ret;
     }
@@ -856,10 +799,9 @@ class AlfoServices {
         # $userToken = $params['userToken'] ?? '';
         # $Uid = $params['userid'] ?? '';
         # $connected = $this->init($userToken, $Uid, '',__FUNCTION__);
-        include_once(__DIR__ . '/../svc/alfo_dataclasses.php');
         if (self::$debug) writeDebugInfo(__FUNCTION__, " start, params: ", $params);
-        $ret = new \StdResponse('OK');
-        $ret->data = \Libs\AppMonitor::activeSessions();
+        $ret = [ 'result' =>'OK' ];
+        $ret['data'] = \Libs\AppMonitor::activeSessions();
         return $ret;
     }
     /**
@@ -869,14 +811,13 @@ class AlfoServices {
     * @return StdResponse
     */
     public function getTranches($params = FALSE) {
-        include_once(__DIR__ . '/../svc/alfo_dataclasses.php');
         if (self::$debug) writeDebugInfo(__FUNCTION__, " start, params: ", $params);
-        $ret = new \StdResponse('OK');
+        $ret = ['result'=>'OK'];
         $codirovka = $params['subtype'] ?? $params['params']['subtype'] ?? '';
         if (self::$debug) writeDebugInfo("getTranches for subtype=$codirovka");
         if(empty($codirovka)) {
-            $ret->result = 'ERROR';
-            $ret->message = 'Не указана кодировка';
+            $ret['result'] = 'ERROR';
+            $ret['message'] = 'Не указана кодировка';
         }
         else {
             $codeid = \AppEnv::$db->select('invins_subtypes',['fields'=>'id','where'=>['code'=>$codirovka],'singlerow'=>1,'associative'=>0]);
@@ -886,7 +827,7 @@ class AlfoServices {
               'condition'=>"FIND_IN_SET('$codeid',codes) AND datestart=tr.tranchedate AND dtr.b_active=1"
             ];
 
-            $ret->data = \AppEnv::$db->select(['tr'=>\PM::TABLE_TRANCHES], [
+            $ret['data'] = \AppEnv::$db->select(['tr'=>\PM::TABLE_TRANCHES], [
               'fields'=>'openday,closeday,tranchedate, dtr.koef_redemption,dtr.est_ku,dtr.gardohod,dtr.part_gf,dtr.part_rf,dtr.coupon_size',
               'join' => $joinCond,
               'where'=>["FIND_IN_SET('$codirovka', codirovka)", "tranchedate>=CURDATE()"], 'orderby'=>'tranchedate']);
@@ -901,10 +842,10 @@ class AlfoServices {
     * @param mixed $params
     */
     public static function periodStats($params = FALSE) {
-        include_once(__DIR__ . '/../svc/alfo_dataclasses.php');
+
         if (self::$debug) writeDebugInfo(__FUNCTION__, " start, params: ", $params);
-        $ret = new \StdResponse('OK');
-        $ret->data = \Libs\AppMonitor::periodStats($params);
+        $ret = ['result'=>'OK'];
+        $ret['data'] = \Libs\AppMonitor::periodStats($params);
         return $ret;
     }
     /**
@@ -914,7 +855,7 @@ class AlfoServices {
         # $userToken = isset($params->userToken) ? $params->userToken : '';
         $programId = $params['program'] ?? $params['module'] ?? '';
         $connected = $this->init($userToken, $Uid, $programId);
-        $ret = new \StdResponse;
+        $ret = ['result'=>'OK'];
         $module = trim($programId);
         $where = [ 'module' => $module, 'stmt_id'=>$policyId ]; // 'userid' => appEnv::$auth->userid,
 
@@ -939,8 +880,8 @@ class AlfoServices {
             $err = 'Не указан номер платежного документа';
 
         if ($err) {
-            $ret->result = 'ERROR';
-            $ret->message = "Отметка об оплате $dta[policyno] не может быть проставлена: $err";
+            $ret['result'] = 'ERROR';
+            $ret['message'] = "Отметка об оплате $dta[policyno] не может быть проставлена: $err";
         }
         else {
             appEnv::$_p = [
@@ -957,12 +898,12 @@ class AlfoServices {
             $payed = $this->plgBackend->setPayed();
 
             if (self::$debug) WriteDebugInfo("call policymodel::setPayed result:", $payed);
-            $ret->result = $payed['result'];
+            $ret['result'] = $payed['result'];
             if ($payed['result'] == 'OK')
-                $ret->message = isset($payed['message']) ? $payed['message']: "Отметка об оплате проставлена";
-            else $ret->message = $payed['message'];
+                $ret['message'] = isset($payed['message']) ? $payed['message']: "Отметка об оплате проставлена";
+            else $ret['message'] = $payed['message'];
             if (isset($payed['data']))
-                $ret->data = $payed['data'];
+                $ret['data'] = $payed['data'];
         }
         return $ret;
     }
@@ -990,10 +931,10 @@ class AlfoServices {
         # TODO: реализовать метод загрузки файла через $bkend->addScan
         $binBody = base64_decode($fileBody);
         # file_put_contents('ttt.pdf', $binBody);  WriteDebugInfo("KT-003, pdf saved from base64");
-        $ret = new StdResponse;
+        $ret = ['result'=>'OK'];
         if (!$binBody) {
-            $ret->result = 'ERROR';
-            $ret->message = 'Неверное содкержимое файла (должна быть строка base64Binary)';
+            $ret['result'] = 'ERROR';
+            $ret['message'] = 'Неверное содкержимое файла (должна быть строка base64Binary)';
             return $ret;
         }
         $scparams = [
@@ -1007,19 +948,19 @@ class AlfoServices {
             $bkResult = $this->plgBackend->addScan($scparams);
             # WriteDebugInfo("backend addScan return:", $bkResult);
             if (isset($bkResult['result'])) {
-                $ret->result = $bkResult['result'];
+                $ret['result'] = $bkResult['result'];
             }
             if (isset($bkResult['message'])) {
-                $ret->message = $bkResult['message'];
+                $ret['message'] = $bkResult['message'];
             }
             if (isset($bkResult['data'])) {
-                $ret->data = $bkResult['data'];
+                $ret['data'] = $bkResult['data'];
             }
         }
         catch (Exception $e) {
             if (self::$debug) WriteDebugInfo('$bkend->addScan exception:', $e);
-            $ret->result='FAULT';
-            $ret->message = $e->getMessage() . ' line '.$e->getLine() . ' file '.$e->getFile();
+            $ret['result']='FAULT';
+            $ret['message'] = $e->getMessage() . ' line '.$e->getLine() . ' file '.$e->getFile();
         }
 
         return $ret;
@@ -1052,9 +993,10 @@ class AlfoServices {
           'fields' =>'id,descr name,filesize',
           'orderby' => 'id'
         ]);
-        $ret = new StdResponse();
-        $ret->result = 'OK';
-        $ret->data['files'] = $dta;
+        $ret = [
+          'result' => 'OK',
+          'data' => ['files' => $dta]
+        ];
         return $ret;
     }
 
@@ -1076,15 +1018,15 @@ class AlfoServices {
         $this->init($userToken, $Uid, $programId);
         $module = trim($programId);
 
-        $ret = new StdResponse();
+        $ret = ['result'=>'OK'];
 
         if (empty($policyId) || empty($fileId)) {
-            $ret->result = 'ERROR';
+            $ret['result'] = 'ERROR';
             $err = [];
             if (!$policyId) $err[] = 'Пустой ИД полиса';
             if (!$fileId || intval($fileId)<=0) $err[] = 'Неверный или пустой ИД файла';
-            $ret->message = implode(';', $err);
-            return $err;
+            $ret['message'] = implode(';', $err);
+            return $ret;
         }
         if (method_exists($this->plgBackend, 'checkDocumentRights')) {
             $access = $this->plgBackend->checkDocumentRights($policyId);
@@ -1094,8 +1036,8 @@ class AlfoServices {
         $pars = ['policyid' =>$policyId, 'id'=>$fileId, 'oper' => 'del' ];
         $result = $this->plgBackend->updtScan($pars);
 
-        $ret->result = $result['result'];
-        $ret->message = isset($result['message']) ? $result['message'] : '';
+        $ret['result'] = $result['result'];
+        $ret['message'] = isset($result['message']) ? $result['message'] : '';
         return $ret;
     }
     /**
@@ -1114,7 +1056,7 @@ class AlfoServices {
     public function cancelPolicy($userToken, $Uid, $programId, $policyId){
         # $userToken = isset($params->userToken) ? $params->userToken : '';
         $connected = $this->init($userToken, $Uid, $programId);
-        $ret = new StdResponse();
+        $ret =['result'=>'OK'];
         $err = '';
 
         $module = trim($programId);
@@ -1133,8 +1075,8 @@ class AlfoServices {
         elseif($dta['stateid'] == 60) $err = 'Полис заблокирован';
 
         if ($err) {
-            $ret->result = 'ERROR';
-            $ret->message = utf8_encode("Простановка статуса Отменен $dta[policyno] невозможна: $err");
+            $ret['result'] = 'ERROR';
+            $ret['message'] = utf8_encode("Простановка статуса Отменен $dta[policyno] невозможна: $err");
         }
         else {
             appEnv::$_p = [
@@ -1143,10 +1085,10 @@ class AlfoServices {
               'state' => 'cancel', # PM::STATE_CANCELED,
             ];
             $payed = $this->plgBackend->setState();
-            $ret->result = $payed['result'];
+            $ret['result'] = $payed['result'];
             if ($payed['result'] == 'OK')
-                $ret->message = self::__strEncode("Полис $dta[policyno] переведен в статус Отменен");
-            else $ret->message = self::__strEncode($payed['message']);
+                $ret['message'] = self::__strEncode("Полис $dta[policyno] переведен в статус Отменен");
+            else $ret['message'] = self::__strEncode($payed['message']);
             # TODO: переводить ли полис в статус ОФОРМЛЕН, или для этого сделать отдельный API метод ?
         }
         return $ret;
@@ -1167,7 +1109,7 @@ class AlfoServices {
      */
     public function getPolicyData($userToken, $Uid, $programId, $policyId) {
 
-        $ret = new GetPolicyDataResponse;
+        $ret = [];
 
         $module = trim($programId);
         if (empty($module)) {
@@ -1178,8 +1120,8 @@ class AlfoServices {
             ]);
 
             if (empty($sdata['module'])) {
-                $ret->result = 'ERROR';
-                $ret->message = 'Данные не найдены';
+                $ret['result'] = 'ERROR';
+                $ret['message'] = 'Данные не найдены';
                 return $ret;
             }
             $module = $sdata['module'];
@@ -1190,26 +1132,26 @@ class AlfoServices {
 
         # WriteDebugInfo("$programId/$policyId: policy loaded data:", $data);
         if (!isset($data['module'])) {
-            $ret->result = 'ERROR';
-            $ret->message = 'Данные не найдены';
+            $ret['result'] = 'ERROR';
+            $ret['message'] = 'Данные не найдены';
             return $ret;
         }
         if ($programId!='' && $data['module'] !== $programId) {
-            $ret->result = 'ERROR';
-            $ret->message = "Полис не относится к указанному виду/продукту ($programId)";
+            $ret['result'] = 'ERROR';
+            $ret['message'] = "Полис не относится к указанному виду/продукту ($programId)";
             return $ret;
         }
         $access = $this->plgBackend->checkDocumentRights();
         if ($access < 1) {
-            $ret->result = 'ERROR';
-            $ret->message = 'Доступ к полису запрещен';
+            $ret['result'] = 'ERROR';
+            $ret['message'] = 'Доступ к полису запрещен';
             return $ret;
         }
-        $ret->result = 'OK';
-        $ret->policyStateId = $data['stateid'];
-        $ret->policyNo = $data['policyno'];
-        $ret->policyState = $this->plgBackend->decodeAgmtState($data['stateid'],'',0);
-        $ret->params = $this->exportParameters( $data, $this->plgBackend->getSpecFields() );
+        $ret['result'] = 'OK';
+        $ret['policyStateId'] = $data['stateid'];
+        $ret['policyNo'] = $data['policyno'];
+        $ret['policyState'] = $this->plgBackend->decodeAgmtState($data['stateid'],'',0);
+        $ret['params'] = $this->exportParameters( $data, $this->plgBackend->getSpecFields() );
         return $ret;
     }
     /**
@@ -1219,8 +1161,8 @@ class AlfoServices {
      * @return CommonDataGrid file name and body OR error message
      */
     function getDataGrid($params) {
-        $ret = new CommonDataGrid;
-        $ret->data = array(
+        $ret = [];
+        $ret['data'] = array(
           ['name'=>'Gadet', 'lastname' => 'John', 'birthdate' => '1977-04-12'],
           ['name'=>'Simpleson', 'lastname' => 'Genry', 'birthdate' => '1979-11-07'],
           ['name'=>'Hardi', 'lastname' => 'Jona', 'birthdate' => '1968-05-17'],
@@ -1517,7 +1459,9 @@ class AlfoServices {
         if(self::$debug) writeDebugInfo("returning data: ", $result);
         return $result;
     }
-
+    public static function getAppConfigValues() {
+        return ['result'=>'OK', 'data'=> AppEnv::$_cfg ];
+    }
     # {upd/2021-12-09} поиск в CHECK_POLICY_DMS (запросы с сайта о статусе полиса ДМС)
     public static function findDmsBso($params) {
 
@@ -1549,5 +1493,79 @@ class AlfoServices {
         $result = [ 'result'=>'OK', 'data' => $rdata ];
         return $result;
 
+    }
+    # Общий вызов проверки данных ФЛ по спискам/блокировкам/паспорт (finmonitor)
+    public function checkCompliance($params) {
+        $dta = $params['params'] ?? $params;
+        if(self::$debug) writeDebugInfo("checkCompliance dta ", $dta);
+        $fmBackEnd = \AppEnv::getPluginBackend('finmonitor'); # $_plugins['finmonitor']->getBackend();
+        $pref = $this->params['pref'] ?? 'insr';
+        $req = [
+            'lastname' => ($dta[$pref.'fam'] ?? ''),
+            'firstname' => ($dta[$pref.'imia'] ?? ''),
+            'patrname' => ($dta[$pref.'otch'] ?? ''),
+            'birthdate' => ($dta[$pref.'birth'] ?? ''),
+            'document' => trim(($dta[$pref.'docser'] ?? ''). ' '. ($dta[$pref.'docno'] ?? '')),
+        ];
+        if(empty($req['lastname']) || empty($req['firstname']) || empty($req['lastname']))
+            return ['result'=>'ERROR', 'message'=>'Не задана фамилия, имя или дата рождения'];
+
+        $result = $fmBackEnd->isError() ? FALSE : $fmBackEnd->request($req, 0);
+        if($result) {
+            $fmStates = $fmBackEnd->getStates();
+            $blocked = $fmStates['terrorist'] || $fmStates['blocked'] || $fmStates['terrorist'] || $fmStates['badpassport'] || $fmStates['blacklist'];
+            $ret = ['result'=>'OK', 'data' => array_merge(['is_blocked'=>$blocked], $fmStates)];
+        }
+        else $ret = ['result'=>'ERROR', 'message'=>'Ошибка вызова сервиса проверки по спискам '];
+        return $ret;
+    }
+    # единая точка получения отчета по его ID
+    public function generateReport($params) {
+        # writeDebugInfo("get report...", $params);
+        $report_id = $params['report_id'] ?? '';
+        $date_from = $params['date_from'] ?? '';
+        $date_till = $params['date_till'] ?? '';
+        $format = $params['format'] ?? 'array'; # "array" или "txt"
+        if(empty($report_id)) return ['result'=>'ERROR', 'message' => 'Не указан ИД отчета' ];
+        # пока - тестовые данные (заглушка)
+        $params['fr_xmlconfig'] = $report_id;
+        $params['fr_format'] = 'array';
+        $reportData = \FlexReps::runReport($params);
+        /*
+        $reportData = [
+          [ 'deptid'=>'Mainsvc-001', 'incomde'=>200.45],
+          [ 'deptid'=>'002', 'incomde'=>400.45],
+          [ 'deptid'=>'003', 'incomde'=>680.40],
+        ];
+        */
+        $ret = [
+          'result'=>'OK',
+          'data' => ['rows'=> $reportData]
+        ];
+        return $ret;
+    }
+    public static function array_shorten_strings($arValues, $maxLen=100) {
+        if($maxLen<=0) return $arValues;
+        if(is_array($arValues)) foreach($arValues as $key=>&$val) {
+            $val = self::array_shorten_strings($val, $maxLen);
+        }
+        else {
+            $vlen = strlen($arValues);
+            if($vlen>$maxLen) $arValues = substr($arValues,0,$maxLen) . "...($vlen Bytes)";
+        }
+        return $arValues;
+    }
+
+    # универсальный метод получения "ресурса"
+    # function: имя вызываемой функции, parameters - массив передаваемых параметров
+    public static function getResource($params) {
+        $callFunc = $params['params']['function'] ?? $params['function'] ?? '';
+        $parameters = $params['params']['parameters'] ?? $params['parameters'] ?? '';
+        writeDebugInfo("getResource for $callFunc, parameters: ", $parameters);
+        if(empty($callFunc)) return ['result'=>'ERROR', 'message'=>'Не указано имя вызываемой ф-ции'];
+        if(!is_callable($callFunc)) return ['result'=>'ERROR', 'message'=>'Неизвестное имя вызываемой ф-ции'];
+        $callResult = call_user_func($callFunc, $parameters);
+        $ret = ['result'=>'OK', 'data' => $callResult];
+        return $ret;
     }
 }

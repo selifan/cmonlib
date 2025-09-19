@@ -3,7 +3,7 @@
 * @package ALFO
 * @name jsvc/test.php
 * Страница для тестирования вызовов JSON API сервиса ALFO
-* modified 2025-07-18
+* modified 2025-09-18
 */
 define('SAVE_RAW_XML', 0); # сохранять в файлы XML содержимое запроса и ответа (включить трейсинг SOAP!)
 # define('CLIENTCALL', TRUE); # TRUE - неавторизованнный клиент из еШопа (ALFO сам найдет ИД по своим настройкам)
@@ -23,6 +23,7 @@ if (!empty($_GET['debug'])) {
 }
 class TestParams {
     static $fromClient = FALSE; # эмулирую вызовы от неавторизованного клиента сайта (сам себе оформляет полис)
+    static $inputData = [];
     static $debug = 0;
     static $userSession = 1; # TRUE - имитирую передачу сессии пользователя (для лога калькуляций в eShop)
     static $rawRequest = '';
@@ -72,16 +73,20 @@ else { # local и все прочие
     if ( appEnv::isProdEnv() )
         $userToken = TOKEN_PROD;
 }
+
+# Выбрал токен явно ?
+if (!empty($_GET['token']))
+    $userToken = $_GET['token'];
+elseif(!empty($pars['token'])) {
+    $userToken = $pars['token'];
+}
+
 if($svcDebug) writeDebugInfo("url to call: $url, \n   token: $userToken");
 if (!empty($_GET['verbose'])) {
     $url .= "?verbose=1";
 }
 # можно передать URL сервиса через строку адреса  &url=https://clientcabtest.allianzlife.ru/fo/jsvc
 if (!empty($_GET['url'])) $url = $_GET['url'];
-
-
-if (!empty($_GET['token']))
-    $userToken = $_GET['token'];
 
 $userid = ''; # Здесь ввести свой Uid
 $myemail = 'supermail@yandex.ru';
@@ -142,14 +147,14 @@ $module = (!empty($pars['module']) ? trim($pars['module']) : '');
 $programid = (!empty($pars['programid']) ? trim($pars['programid']) : '');
 $subtypeid = (!empty($pars['subtypeid']) ? trim($pars['subtypeid']) : '');
 $serialize = $pars['serialize'] ?? 0;
-
-if (empty($req)) {
+$usrFunc = $pars['usr_func'] ?? '';
+if (empty($req) && empty($usrFunc)) {
     testForm();
  /*    die('
 Call tests options:<br><pre>
 ?req=calc - test calculatePolicy(), (&progid={yourproduct} to test another program, trmig by default)
 ?req=next - test GetApplNumb(), next Policy number
-?req=save - test savePolicy(), (create new policy, <b>trmig</b> product, OR update if &id=NNN)
+?req=saveAgreement - test saveAgreement(), (create new policy, <b>trmig</b> product, OR update if &id=NNN)
 ?req=list - test getPolicyList()
 ?req=pay - test setAgreementPayed(), pass policy ID: &id={ID} [&online=1 - online payment flag] [&doc=NNNNNN] - номер пл.документа
 ?req=cancel - test cancelPolicy(), pass policy ID: &id={ID}
@@ -164,29 +169,11 @@ Call tests options:<br><pre>
 */
 }
 
-
 $saveRequestDetails = 0;
-$randomizeNames = TRUE; # генерить случайные ФИО поверх сохранёенных тест-кейсов "cacldata-<module>.php"
+$wirhPassport = TRUE; # при создании полиса сразц отправлять и "скан паспорта"
+$randomizeNames = 0; # генерить случайные ФИО поверх сохранёенных тест-кейсов "cacldata-<module>.php"
 
 if (empty($birth)) $birth = '01.01.' . rand(1962,1999);
-
-/**
-$params = [
-    'userToken' => $userToken,
-    'module' => $module,
-    'execFunc' => '',
-    'params' => [
-        'datefrom' => date('Y-m-d', strtotime('+10 days')),
-        'datetill' => date('Y-m-d', strtotime('+2 years 9 days')),
-        'vakcina' => '1',
-        'insuredlist' => [
-           [ 'birth'=>'02.05.1988', 'sex' => 'M', 'fullname' => 'Олух Олег Бывалович', 'fullname_lat' => 'Oluh', 'rez_country' => 'Молдова',
-             'sex' => 'M',
-           ]
-        ]
-    ],
-];
-**/
 
 $result = NULL;
 $policyId = isset($pars['policyid']) ? $pars['policyid'] : 0;
@@ -198,7 +185,15 @@ if (!empty($_GET['url']))
   if (!empty($_GET['token']))
   $userToken = $_GET['token'];
 */
-switch($req) {
+if(!empty($usrFunc)) {
+    $params = [
+        'userToken' => $userToken,
+        'execFunc' => $usrFunc,
+        'serialize' => $serialize,
+        'params' => $pars,
+    ];
+}
+else switch($req) {
     # Сначала простые запросы
     case 'countries':
         $params = [
@@ -257,56 +252,6 @@ switch($req) {
           'params' => $calcParams
         ];
 
-        /*
-        switch($module) {
-            case 'planb':
-                if ($rass!=='') $params->data->rassrochka = $rass;
-                break;
-
-            case 'invonline':
-                $params->term = (empty($_GET['term']) ? 5 : intval($_GET['term'])); // 3 или 5 лет
-
-                if (!empty($_GET['sa'])) $params->data->plc_sa = $_GET['sa'];
-                elseif (!empty($_GET['premium'])) $params->data->premium = $_GET['premium'];
-                else $params->data->plc_sa = 1000000;
-
-                if (!empty($_GET['warr'])) $params->data->warranty = $_GET['warr'];  # гарантия
-                else $params->data->warranty = 100;
-
-                if (!empty($_GET['ba'])) $params->data->baseactive = $_GET['ba']; # Базовый актив
-
-                break;
-
-            case 'RiskControl': # Риск-Контроль
-                # $params->birthDate = '01.02.2016'; # проверка вывода ошибки по возрасту
-                $params->term = 1;
-                $params->data->pppperiodicity = '1';
-                if ($rass!=='') $params->data->pppperiodicity = $rass;
-                # pppperiodicity = оплата : 1=ежегодно (раз в год), 2=раз в полгода, 4=ежеквартально, 12=ежемес, -1=единоврем
-                # стандартные типы ALFO:   12=ежегодно              6=полгода        3=ежекварт 1=ежемес !
-                $params->data->currency = 'rub';
-                $params->data->in3sarub = '1000000';
-                $params->data->in3from = '2'; # от Стр.суммы (1 - от премии, in3prub)
-                $params->data->in4sarub = '500000';
-                $params->data->in4from = '2';
-                $params->data->in5sarub = '500000';
-                $params->data->in5from = '2';
-                # ...
-                break;
-
-            case 'RiskControl_Lite': # Риск-Контроль детский
-                $params->term = 1; # единственный допустимый срок - 1 год
-                $params->data->pppperiodicity = '1';
-                if ($rass!=='') $params->data->pppperiodicity = $rass;
-                $params->data->currency = 'rub';
-                $params->birthDate = '01.01.2015';
-                $params->data->in4sarub = '500000';
-                $params->data->in4from = '2';
-                $params->data->in5sarub = '300000';
-                $params->data->in5from = '2';
-                break;
-        }
-        */
         # $params->term = 1;
         try {
             $result = performCall($url, $params);
@@ -317,6 +262,74 @@ switch($req) {
         }
         break;
 
+    case'getAgreement': # boxprod - получить полис
+        $doctype = $pars['doctypeid'] ?? 'policy';
+        $params = [
+            'userToken' => $userToken,
+            'module' => $module,
+            'execFunc' => $req,
+            'serialize' => $serialize,
+            'params' => [
+              'policyid' => ($pars['policyid'] ?? ''),
+            ]
+        ];
+        break;
+
+    case'generateReport': # boxprod - получить полис
+        $doctype = $pars['doctypeid'] ?? 'policy';
+        $params = [
+            'userToken' => $userToken,
+            'module' => $module,
+            'execFunc' => $req,
+            'serialize' => $serialize,
+            'params' => [
+              'report_id' => ($pars['report_id'] ?? ''),
+            ]
+        ];
+        break;
+
+    case'generateDoc': # boxprod - генерация ПФ
+        # $pairs = explode('-', $req);
+        $doctype = $pars['doctypeid'] ?? 'policy';
+        $params = [
+            'userToken' => $userToken,
+            'module' => $module,
+            'execFunc' => $req,
+            'serialize' => $serialize,
+            'params' => [
+              'doctypeid' => $doctype,
+              'policyid'=> ($pars['policyid'] ?? '')
+            ]
+        ];
+        if($doctype === 'policyid')
+            $params['params']['policyid'] = ($pars['policyid'] ?? '');
+        elseif($doctype === 'soglasie_pdn') {
+            if(!empty($pars['policyid']))
+                $params['params']['policyid'] = ($pars['policyid'] ?? '');
+            else {
+                $calcParams = jsvcPreparePolicyParams($module, $programid, $subtypeid);
+                $params['params'] = array_merge($params['params'],$calcParams);
+            }
+        }
+        break;
+
+    case 'uploadDocument':
+        $scantype = $pars['scantype'] ?? 'passport_insr';
+        $outFname = AppEnv::getAppFolder('app/') . 'test.pdf';
+        $params = [
+            'userToken' => $userToken,
+            'module' => $module,
+            'execFunc' => $req,
+            'serialize' => $serialize,
+            'params' => [
+              'policyid' => ($pars['policyid'] ?? ''),
+              'scantype' => $scantype,
+              'filename' => 'test-01.pdf',
+              'filebody' => base64_encode(file_get_contents($outFname)),
+            ]
+        ];
+        break;
+
     case 'next':
         try {
             # $params = new stdClass();
@@ -324,26 +337,34 @@ switch($req) {
             echo 'call GetApplNumb result:<pre>'.print_r($result,1) . '</pre>';
         }
         catch (exception $e) {
-            echo ('getNextStatementNo: SoapFault exception: <pre>'.  print_r($e,1) . '</pre>');
+            echo ('getNextStatementNo: exception: <pre>'.  print_r($e,1) . '</pre>');
             showLastReqHtml();
         }
         break;
 
-    case 'save':
+    case 'saveAgreement':
         # $result = callSavePolicy($pars); меняю на стандартный вызов из подключаемого модуля
         $calcParams = jsvcPreparePolicyParams($module, $programid, $subtypeid);
+        if($wirhPassport) {
+            $testPdf = AppEnv::getAppFolder('app/') . 'test.pdf';
+            $calcParams['scan_files'] = [
+              [ 'scantype'=>'passport_insr', 'filename'=>'passport.pdf', 'filebody'=>base64_encode(@file_get_contents($testPdf)) ]
+              # ... можно несколько файлов
+            ];
+        }
         if(!empty(AppEnv::$_p['policyid'])) {
             # обновляю ранее созданный полис
-            $calcParams['stmt_id'] = AppEnv::$_p['policyid'];
+            $calcParams['policyid'] = AppEnv::$_p['policyid'];
         }
+
         $params = [
           'userToken' => $userToken,
           'module' => $module,
-          'execFunc' => 'savePolicy',
+          'execFunc' => $req,
           'serialize' => $serialize,
           'params' => $calcParams
         ];
-
+        /*
         try {
             $result = performCall($url, $params);
             # echo 'call calculate result:<pre>'.print_r($result,1) . '</pre>';
@@ -351,9 +372,39 @@ switch($req) {
         catch (Exception $e) {
             echo ('createPolicy: ERROR: <pre>'.  print_r($e,1) . '</pre>');
         }
-
+        */
+        break;
+    case 'readyToPay':
+    case 'updateStatusAgreement':
+        # TODO: готов оплатить онлайн - перевести полис в соотв.статус, создать ордер на оплату, прислать ссылку
+        $params = [
+            'userToken' => $userToken,
+            'execFunc' => $req, #'readyToPay',
+            'serialize' => $serialize,
+            'params' => [
+              'module' => $pars['module'],
+              'policyid' => $pars['policyid'],
+              'sescode' => \UniPep::createPepHash($pars['policyid'], $pars['module'])
+            ]
+        ];
+        if($req ==='updateStatusAgreement') {
+            $params['params']['status'] = $pars['status'] ?? 'payed';
+        }
         break;
 
+    case 'checkpolicystate':
+        $params = [
+            'userToken' => $userToken,
+            'execFunc' => 'checkPolicyState',
+            'serialize' => $serialize,
+            'params' => [
+              'module' => $pars['module'],
+              'policyid' => $pars['policyid'],
+            ]
+        ];
+
+        # TODO: проверить статус полиса (оплачен/аннулирован/на андеррайтинге
+        break;
     case 'pay':
         $result = callSetPolicyPayed($pars);
         break;
@@ -588,6 +639,24 @@ switch($req) {
         }
         break;
     */
+    case 'checkCompliance':
+        $params = [
+            'userToken' => $userToken,
+            'module' => $module,
+            'execFunc' => $req,
+            'serialize' => $serialize,
+            'params' => [
+                'insrfam' => 'Террорист-паспорт',
+                'insrimia' => 'Михаил',
+                'insrotch' => 'Олегович',
+                'insrsex' => 'M',
+                'insrbirth' => '10.01.1988',
+                'insrdoctype' => '1',
+                'insrdocser' => '4500',
+                'insrdocno' => '123456',
+            ]
+        ];
+        break;
     default:
         die("<b>$req</b> - Неподдерживаемая команда !");
 }
@@ -602,8 +671,10 @@ catch (Exception $e) {
 }
 
 if (!empty(TestParams::$rawRequest)) {
-    $showBody = fineView(TestParams::$rawRequest);
-    $cutToken = substr($userToken,0,4) . '...' . substr($userToken,-4);
+    # $shortenReq = alfoservices::array_shorten_strings(TestParams::$rawRequest)
+    $showBody = print_r(TestParams::$inputData, 1);
+    # $showBody = fineView(TestParams::$rawRequest);
+    $cutToken = substr($userToken,0,8) . '...' . substr($userToken,-4);
     $showBody = str_replace($userToken,$cutToken, $showBody);
     echo "url $url, raw Request body: <pre style='overflow:auto'>$showBody</pre>";
 }
@@ -626,7 +697,7 @@ else echo 'empty servise response:  <pre>' . print_r($result,1). '</pre>';
 *
 */
 function testForm() {
-    $title = 'Тестировние JSON API ALFO';
+    $title = 'Тесты ALFO JSON API';
     $html = <<< EOHTM
 <!DOCTYPE html>
 <html>
@@ -636,8 +707,7 @@ function testForm() {
 <link rel="stylesheet" href="../css/styles.css" type="text/css" />
 <link rel="stylesheet" href="../css/styles-zetta.css" type="text/css" />
 
-<script type="text/javascript" src="../js/jquery-3.6.0.min.js"></script>
-<script type="text/javascript" src="../js/jquery-migrate-3.0.0.js"></script>
+<script type="text/javascript" src="../js/jquery-2.2.2.min.js"></script>
 <script type="text/javascript" src="../js/jquery-ui.min.js"></script>
 <script type="text/javascript" src="../js/i18n/jquery.ui.datepicker-ru.js"></script>
 <script type="text/javascript" src="../js/asjs.js"></script>
@@ -649,7 +719,15 @@ tst = {
     $.post('./test.php', $("#fm_apitests").serialize(), function(data){
       $("#results").html(data);
     });
-  },
+  }
+  ,clearLog: function() {
+    $("#results").html("");
+  }
+  ,plcidNeed : ["saveAgreement","getpdfpolicy","getpdfbill","getpdfagr","readyToPay",
+      "checkpolicystate","getAgreement","generateDoc","updateStatusAgreement","uploadDocument"],
+
+  statusNeed : ["updateStatusAgreement"],
+  doctypeNeed : ["generateDoc"],
   chgFunction: function() {
     var func = $("#req").val();
     if(func === "finddmspolicy") $("tr.dmspolicy").show();
@@ -662,15 +740,26 @@ tst = {
     if(func === "getEventLog") $("tr.eventlog").show();
     else $("tr.eventlog").hide();
 
-    if(func === "decodePolicyQrCode") $("tr.qrcode").show();
-    else $("tr.qrcode").hide();
+    if(func === "decodePolicyQrCode") $(".qrcode").show();
+    else $(".qrcode").hide();
+
+    if(func === "generateReport") $(".genreport").show();
+    else $(".genreport").hide();
 
     if(func === "gettranches") $("tr.gettranches").show();
     else $("tr.gettranches").hide();
 
-    if(func === "save" || func=='getpdfpolicy' || func=='getpdfbill' || func=='getpdfagr' || func=='pay')
+    if(tst.plcidNeed.indexOf(func)>=0)
         $("tr.policyid").show();
     else $("tr.policyid").hide();
+
+    if(tst.statusNeed.indexOf(func)>=0)
+        $("td.status").show();
+    else $("td.status").hide();
+
+    if(tst.doctypeNeed.indexOf(func)>=0)
+        $("td.doctype").show();
+    else $("td.doctype").hide();
 
   }
 };
@@ -684,18 +773,14 @@ tst = {
 <form id="fm_apitests" onsubmit="return false">
 <div class="bordered p-2">
  <table>
+
  <tr>
-   <td class="p-5">модуль:<br><select name="module" id="module" class="ibox w200">
-   <option value="">---</option>
-   <option value="boxprod">Коробочные</option>
-   <option value="trmig">Мигранты (trmig)</option>
-   <option value="nsj">НСЖ (nsj)</option>
-   <option value="lifeag">агентские прод.</option>
-   <option value="irisky">Рисковые</option>
-   <option value="ndc">Здоровая Жизнь/Global Life (ndc)</option>
-   <option value="invins">ИСЖ(новое)</option>
-   <option value="oncob">Онко-Барьер</option>
-   <option value="pochvo">Поч.Возраст</option>
+   <td class="p-5">Токен пользователя:<br>
+   <select name="token" id="token" class="ibox w200">
+     <option value="" selected >Выбрать автоматически</option>
+     <option value="ZAIFQ1S6DLKCD37VMI0-QQV7VHAFT7Z5RJM">Test Bank API</option>
+     <option value="R9MECBZ745DH3H8C15DK00RXZGTEB7V1BZIH">Raiff API-ввод</option>
+     <option value="WQ91W9GE4DFU361H132RSU04N2ZAMDJQTTVI32">Raiff API-отчеты</option>
    </select>
    </td>
    <td class="p-5">операция:<br><select name="req" id="req" class="iboxm w300" onchange="tst.chgFunction()">
@@ -706,7 +791,15 @@ tst = {
    <option value="getprograms">Список доступных программ</option>
    <option value="getprogramsubtypes">Список доступных суб-типов в программе</option>
    <option value="calc">calc - Выполнить расчет</option>
-   <option value="save">save - Создать/Сохранить полис</option>
+   <option value="checkCompliance">checkCompliance проверка по спискам</option>
+   <option value="checkpolicystate">Запросить статус полиса</option>
+   <option value="saveAgreement">saveAgreement - Создать/Сохранить полис</option>
+   <option value="uploadDocument">uploadDocument - загрузить скан паспорта</option>
+   <option value="getAgreement">getAgreement - Получить данные полиса</option>
+   <option value="updateStatusAgreement">updateStatusAgreement - проставить Оплату или аннулировать</option>
+   <option value="generateDoc">generateDoc - получить ПФ ...</option>
+   <option value="generateReport">generateReport - получить отчет...</option>
+   <option value="readyToPay">readyToPay-Запросить ссылку на онлайн-оплату</option>
    <option value="pay">Отметка об оплате</option>
    <option value="getpdfpolicy">Получить PDF полиса</option>
    <option value="getpdfbill">Получить PDF счета на оплату</option>
@@ -721,10 +814,28 @@ tst = {
    <option value="methodlist">Получить список всех методов</option>
    </select>
    </td>
-   <td class="p-5">номер/ИД программы<br><input type="text" class="ibox w100" name="programid" id="programid">
+   <td>Или имя метода<br><input type="text" name="usr_func" id="usr_func" class="ibox w120" /></td>
+ </tr>
+ <tr>
+   <td class="p-5">модуль:<br><select name="module" id="module" class="ibox w200">
+   <option value="">---</option>
+   <option value="boxprod">Коробочные</option>
+   <option value="trmig">Мигранты (trmig)</option>
+   <option value="nsj">НСЖ (nsj)</option>
+   <option value="lifeag">агентские прод.</option>
+   <option value="irisky">Рисковые</option>
+   <option value="ndc">Здоровая Жизнь/Global Life (ndc)</option>
+   <option value="invins">ИСЖ(новое)</option>
+   <option value="oncob">Онко-Барьер</option>
+   <option value="pochvo">Поч.Возраст</option>
+   </select>
    </td>
-   <td class="p-5">номер/ИД подпрограммы<br><input type="text" class="ibox w100" name="subtypeid" id="subtypeid">
-   </td>
+   </tr>
+   <tr>
+       <td class="p-5">номер/ИД программы<br><input type="text" class="ibox w100" name="programid" id="programid"></td>
+       <td class="p-5">номер/ИД подпрограммы<br><input type="text" class="ibox w100" name="subtypeid" id="subtypeid"></td>
+       <td class="p-5 genreport" style="display:none">ИД отчета<br><input type="text" class="ibox w100" name="report_id" id="report_id" value="bankPolicies"></td>
+
    </tr>
    <tr class="dmspolicy" style="display:none">
      <td class="p-5">Серия<br><input type="text" name="dms_ser" class="ibox w100" ></td>
@@ -734,7 +845,19 @@ tst = {
      <td class="p-5">Номер БСО<br><input type="text" name="dms_bsonum" class="ibox w200"></td>
    </tr>
    <tr class="policyid" style="display:none">
-     <td class="p-5">Номер полиса(если сохранить)<br><input type="text" id="policyid" name="policyid" class="ibox w200"></td>
+     <td class="p-5">ИД карточки полиса<br><input type="text" id="policyid" name="policyid" class="ibox w200"></td>
+
+     <td class="p-5 status" style="display:none">Новый Статус:<br><select name="status" id="status" class="ibox w200">
+       <option>payed</option>
+       <option>cancel</option>
+       </select>
+     </td>
+     <td class="p-5 doctype" style="display:none">Какой документ:<br><select name="doctypeid" id="doctypeid" class="ibox w200">
+       <option>policy</option>
+       <option>soglasie_pdn</option>
+       </select>
+     </td>
+
    </tr>
    <tr class="innrequest" style="display:none">
      <td class="p-5">Номер ИНН для поиска<br><input type="text" id="inn" name="inn" class="ibox w200"></td>
@@ -762,16 +885,21 @@ tst = {
      <td class="p-5">Запрос на сервер<br>
        <select name="ask_server" id="ask_server" class="ibox w200">
        <option value="local">Локально</option>
-       <option value="test1">Тест-сервер 1 (PHP7)</option>
-       <option value="test2">Тест-сервер 2 (PHP8)</option>
+       <option value="test1">ClentCabTest</option>
+       <option value="test2">Тест-сервер-2 (пре-прод)</option>
        <option value="prod">Продуктовый</option>
        </select>
      </td>
    </tr>
+   <tr>
+     <td class="p-5" colspan="4"><br>
+         <div class="area-buttons card-footer" >
+           <button class="btn btn-primary" onclick="tst.runForm()">Выполнить запрос</button>
+           <button class="btn btn-primary" onclick="tst.clearLog()">Очистить лог</button>
+         </div>
+     </td>
+   </tr>
  </table>
- <div class="area-buttons">
-   <button class="btn btn-primary" onclick="tst.runForm()">Выполнить запрос</button>
- </div>
 </div>
 </form>
 <pre id="results" class="bordered" style="min-height:100px; max-height:400px; overflow:auto;">results...
@@ -795,7 +923,7 @@ function jsvcPreparePolicyParams($module, $programid='', $subtypeid='') {
     if(is_file($paramFile)) {
         $calcParams = include($paramFile);
         # writeDebugInfo("юзаю файл параметров: $paramFile");
-        $calcParams['datefrom'] = date('d.m.Y',strtotime('+5 days'));
+        # $calcParams['datefrom'] = date('d.m.Y',strtotime('+5 days'));
         if($randomizeNames && stream_resolve_include_path("class.randomdata.lang-ru.php")) {
             $sex = strtolower($calcParams['insrsex'] ?? 'm');
             include_once("class.randomdata.php");
@@ -805,7 +933,8 @@ function jsvcPreparePolicyParams($module, $programid='', $subtypeid='') {
             $calcParams['insrotch'] = \RandomData::getMiddleName($sex);
         }
     }
-    else $calcParams = [
+    else {
+        if($module ==='trmig') $calcParams = [
             'datefrom' => date('Y-m-d', strtotime('+10 days')),
             'datetill' => date('Y-m-d', strtotime('+2 years 9 days')),
             'vakcina' => '1', # набор расчета для мигрантов
@@ -814,7 +943,14 @@ function jsvcPreparePolicyParams($module, $programid='', $subtypeid='') {
                  'sex' => 'M',
                ]
             ]
-    ];
+        ];
+        else $calcParams = [
+          'insrfam'=>'Полоумный',
+          'insrimia'=>'Ивантей',
+          'insrotch'=>'Раздолбаевич',
+          'insrbirth'=>'01.01.1980',
+        ];
+    }
     return $calcParams;
 }
 
@@ -966,8 +1102,9 @@ function callSetPolicyPayed($params) {
 }
 
 function performCall($url, $data) {
-    $ch = curl_init($url);
+    TestParams::$inputData = AlfoServices::array_shorten_strings($data);
     TestParams::$rawRequest = json_encode($data,JSON_UNESCAPED_UNICODE);
+    $ch = curl_init($url);
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
     curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
     curl_setopt($ch, CURLOPT_HEADER, false);

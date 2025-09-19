@@ -9,6 +9,7 @@ class apiUtils {
     static $skipEmptyParams = TRUE;
     /**
     * сохраняет в файл набор данных из калькулятора/редактора полиса для использования в тестах API
+    * - для этого в нужном месте своего модуля занеси код \jsvc\apiUtils::saveCalcData();
     */
     public static function saveCalcData() {
         $body = '$params = [';
