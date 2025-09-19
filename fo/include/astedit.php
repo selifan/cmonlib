@@ -3,10 +3,8 @@
 * @package astedit , Database tables create/upgrade/browse/edit engine  (CRUD++)
 * @name astedit(x).php - main module, classes CFieldDefinition,CIndexDefinition,CTableDefinition
 * @author Alexander Selifonov, < alex [at] selifan dot ru >
-* @link http://www.selifan.ru
-* @Version 1.76.0398
-* PHP 5.3 fixes : split->preg_split etc.
-* last_update 2021-12-24
+* @Version 1.86.003
+* updated 2025-07-18
 **/
 # error_reporting (E_ALL ^ E_NOTICE);
 # User field types, added by including your own classes
@@ -16,18 +14,19 @@ interface UserFieldType {
     public function encodeValue($fldname, $values);
     public function decodeValue($fldname, $values);
 }
+/*
 class AstUserFieldTypes {
     static $list = array();
     public static function add($typeid, $className) {
         self::$list[$typeid] = $className;
     }
 }
-
+*/
 class Astedit {
     static $_jQuery_dates = false;
     static $db = null;
     const PREFIX_MACRO = '%tabprefix%';
-    const VERSION = '1.75';
+    const VERSION = '1.86';
     static $VERBOSE = 0; // set it to 1 if some 'debug' messages needed
     static $checkLoginFunc = FALSE; # user function to check new login against existing ones
     public static function ActivateDateModifier() { self::$_jQuery_dates = true; }
@@ -44,7 +43,7 @@ class Astedit {
         else {
             global $as_dbengine;
             if (!is_object(self::$db)) {
-                if(class_exists('appEnv') && isset(appEnv::$db)) self::$db =& appEnv::$db;
+                if(class_exists('AppEnv') && isset(AppEnv::$db)) self::$db =& appEnv::$db;
                 elseif(is_object($as_dbengine)) self::$db =& $as_dbengine;
                 elseif (class_exists('CDbEngine')) self::$db = CDbEngine::getInstance();
             }
@@ -58,10 +57,11 @@ class Astedit {
     }
     public static function showError($text) {
       /*
-      if (class_exists('appEnv') && is_callable('appEnv::addInstantMessage'))
+      if (is_callable('appEnv::addInstantMessage'))
         appEnv::addInstantMessage($text,'astedit_update');
+        else
       */
-      echo "<div class=\"alarm\" style=\"width:600px\">$text</div>";
+      echo "<div class=\"alarm w-600\">$text</div>";
     }
 
     /**
@@ -126,8 +126,11 @@ class Astedit {
               foreach($arr as $qryname=>$qrytext) { #<4>
                 self::$db->sql_query($qrytext); # debug
                 $sqlerr = Astedit::$db->sql_error();
-                if (!$sqlerr)
+                if (!$sqlerr) {
                     $tx_result = 'OK';
+                    $rows = self::$db->affected_rows();
+                    if($rows>0) $tx_result .= " ($rows)";
+                }
                 else {
                     $tx_result = "$t_error : ".$sqlerr;
                 }
@@ -312,6 +315,99 @@ class Astedit {
         $pars = array_merge($_GET, $_POST);
         return ('defaltRecView params <pre>' . print_r($pars,1). '</pre>');
     }
+    # make charset name to MySQL supported name
+    # Atas: new MySQL 8+ converts UTF8 to UTF8MB3 ! (UTF8 obsolete)
+    public static function csetToDb($charset, $newMySQL=FALSE) {
+        switch(strtolower($charset)) {
+            case 'utf-8':
+            case 'utf8':
+                return ($newMySQL ? 'UTF8MB3':'UTF8');
+            case 'windows-1251':
+                return 'CP1251';
+        }
+        return $charset;
+    }
+    /**
+    * getting Comprehensive error description (mySQL error codes)
+    *
+    * @param mixed $errno Error Number
+    * @param mixed $errText Error Text, used if errno not described
+    * @param mixed $tableiId
+    */
+    public static function decodeSqlError($errno, $errText, $tableiId='') {
+        $sRet = '';
+        if(isset(AsteditLocalization::$strings['sql_error_'.$errno]))
+            $sRet = AsteditLocalization::$strings['sql_error_'.$errno];
+        elseif(is_callable('AppEnv::getLocalised')) $sRet = Appenv::getLocalized('sql_error_'.$errno);
+        if(empty($sRet)) $sRet = $errText;
+        if(!empty($tableiId)) $sRet = str_replace('{tablename}', $tableiId, $sRet);
+        return $sRet;
+    }
+    public static function brShortText($txt, $maxlen=40) {
+        if(empty($txt)) return '';
+        $txt = strip_tags($txt);
+        $cset = defined('MAINCHARSET')? constant('MAINCHARSET') : '';
+
+        $cr = strpos($txt, "\r");
+        if($cr >0 && $cr<4 && $cr<$maxlen) $cr =strpos($txt, "\r", $cr+2);
+        if($cr>0)
+        $cutoff = min($cr, $maxlen);
+        else $cutoff = $maxlen;
+        if (substr($cset,0,3) === 'UTF') {
+            $ret = ($cutoff < mb_strlen($txt, $cset)) ? mb_substr($txt,0,$cutoff,$cset) . '...' : $txt;
+            return $ret;
+        }
+        return ($cutoff < strlen($txt))? substr($txt,0,$cutoff).'...' : $txt;
+
+    }
+
+    public static function evalValue($param, $par_arr=null) {
+        if(empty($param)) return false;
+        $ret = false;
+        if('@' === substr($param,0,1)) { #<3>
+          $fnc =substr($param,1);
+          # writeDebugInfo("func:", $fnc);
+          if(is_callable($fnc)){
+              $ret = call_user_func($fnc, $par_arr);
+          }
+          else {
+              $splt = explode('::', $fnc);
+              if (count($splt)>1 && class_exists($splt[0])) {
+                  $clsName = $splt[0]; $obj = $splt[1];
+                  # WriteDebugInfo(" try to get prop: $clsName :: $obj");
+                  $evaluated = $clsName::$obj($par_arr);
+                  return $evaluated;
+              }
+          }
+        } #<3>
+        elseif('#' === substr($param,0,1) && stripos($param,'{ID}')!==false) {
+          $fnc = substr($param,1);
+          $fnc = str_ireplace('{ID}', $par_arr, $fnc);
+          $ret = eval($fnc); # "{ID} > 1" returns eval(param>1)
+        }
+        elseif('~' === substr($param,0,1)) { #~SELECT ... operator, return result as array
+          $qry = substr($fnc,1);
+          $qry = str_ireplace('{ID}', $par_arr, $fnc);
+          $lnk = Astedit::$db->sql_query($qry);
+          $ret = array();
+          while(($lnk) && ($r=Astedit::$db->fetch_row($lnk))) $ret[] = $r;
+        }
+        elseif('!' === substr($param,0,1)) { #<3> read option list from file
+         $Lname = substr($param,1);
+         $ret = array();
+         if(is_readable($Lname) && ($ffh=fopen($Lname,'r'))>0) { #<4>
+           while(!feof($ffh)) {
+             $strk = trim(fgets($ffh,4096));
+             if($strk[0]!='#') $ret[] = explode('|', $strk);
+           }
+           fclose($ffh);
+         } #<4>
+        } #<3>
+        else {
+          $ret = $param;
+        }
+        return $ret;
+    }
 } # astedit end
 
 if(!defined('DEFAULT_TBLTYPE')) define ('DEFAULT_TBLTYPE', 'MYISAM'); # default table type for CREATE TABLE operation
@@ -349,7 +445,7 @@ $ast_wysiwyg_type = '';
 global $as_cssclass, $ast_tips;
 
 if(!isset($as_cssclass)) $as_cssclass = array();
-if(empty($as_cssclass['textfield'])) $as_cssclass['textfield'] = 'ibox';
+if(empty($as_cssclass['textfield'])) $as_cssclass['textfield'] = 'form-control d-inline w-auto-custom';
 if(empty($as_cssclass['trowhead'])) $as_cssclass['trowhead'] = 'head';
 if(empty($as_cssclass['tdhead'])) $as_cssclass['tdhead'] = 'head';
 #if(empty($as_cssclass['troweven'])) $as_cssclass['troweven'] = 'even';
@@ -358,7 +454,7 @@ if(empty($as_cssclass['trmouseover'])) $as_cssclass['trmouseover'] = 'mouseover'
 if(empty($as_cssclass['pagelnk'])) $as_cssclass['pagelnk'] = 'pagelnk';
 if(empty($as_cssclass['pagelnka'])) $as_cssclass['pagelnka'] = 'pagelnka';
 
-if(empty($as_cssclass['button'])) $as_cssclass['button'] = 'button';
+if(empty($as_cssclass['button'])) $as_cssclass['button'] = 'btn btn-primary';
 if(!isset($ast_hideserachbar)) $ast_hidesearchbar=false; # enable show/hide search toolbar
 $ast_datarow = array(); # global var will hold data row array
 $ast_frmfunctions = array(); # registered drawing form field functions for astedit
@@ -401,39 +497,41 @@ if(isset($ast_parm['asteditajax']) ) {
 
 class CFieldDefinition
 { # one table field definition
-  var $id = ''; # field "id" or var_name for this field in php form blocks
-  var $external = FALSE;
-  var $getter = FALSE; # for external fields only : getter and setter function
-  var $setter = FALSE;
-  var $desc = ''; # long description
-  var $shortdesc = '' ; # short description (browse header)
-  var $name = ''; # field name
-  var $type = '';
-  var $length = '';
-  var $notnull = '';
-  var $defvalue = ''; # DEFAULT value for field (for SQL CREATE TABLE operator) DEFAULT[,new_formula]
-  var $showcond = ''; # show in browse if condition evals nonempty
-  var $showformula = ''; # convert value with eval(this formula)
-  var $showattr = ['','','','']; # align, color, bgcolor,class - additional attribs for feild in grid: |@showformaul[,align[,color[,classes]]|...
-  var $showhref = ''; # 14-th field - HREF with {ID} - makes linked href from browse page
-  var $hrefaddon = '';# additional HTML tags for editing-mode : onClick="...." title="..."
-  var $editcond = ''; # "editable"  condition for field, 'C'- auto-create for New records
-  var $edittype = ''; # in what form edit: checkbox, listbox... + formula for options
-  var $inputtags = ''; # some additional tags in <input ...> tag, i.e. onChange='myfunc()'
-  var $idx_name  = ''; # if field must be indexed, here is the index's unique name
-  var $idx_unique = 0; # non-empty value if index is unique
-  var $derived = 0; # this field came from Parent table
-  var $_autoinc = false; # auto-incremented field
-  var $afterinputcode = ''; # additional html code after input field (some buttons with JS code etc...)
-  var $imgatt = '';
-  var $subtype = false;
-
+  public $id = ''; # field "id" or var_name for this field in php form blocks
+  public $external = FALSE;
+  public $getter = FALSE; # for external fields only : getter and setter function
+  public $setter = FALSE;
+  public $desc = ''; # long description
+  public $shortdesc = '' ; # short description (browse header)
+  public $name = ''; # field name
+  public $type = '';
+  public $length = '';
+  public $notnull = '';
+  public $defvalue = ''; # DEFAULT value for field (for SQL CREATE TABLE operator) DEFAULT[,new_formula]
+  public $showcond = ''; # show in browse if condition evals nonempty
+  public $showformula = ''; # convert value with eval(this formula)
+  public $showattr = ['','','','']; # align, color, bgcolor,class - additional attribs for field in grid: |@showformaul[,align[,color[,classes]]|...
+  public $showhref = ''; # 14-th field - HREF with {ID} - makes linked href from browse page
+  public $hrefaddon = '';# additional HTML tags for editing-mode : onClick="...." title="..."
+  public $editcond = ''; # "editable"  condition for field, 'C'- auto-create for New records
+  public $edittype = ''; # in what form edit: checkbox, listbox... + formula for options
+  public $inputtags = ''; # some additional tags in <input ...> tag, i.e. onChange='myfunc()'
+  public $idx_name  = ''; # if field must be indexed, here is the index's unique name
+  public $idx_unique = 0; # non-empty value if index is unique
+  public $derived = 0; # this field came from Parent table
+  public $_autoinc = false; # auto-incremented field
+  public $afterinputcode = ''; # additional html code after input field (some buttons with JS code etc...)
+  public $editRowClass = ''; # edditional class name for whole row in edit form
+  public $imgatt = '';
+  public $subtype = false;
+  public $specs = [];
+  public $unique = FALSE;
   public function GetDefaultValue() {
     $defar = explode(',',$this->defvalue);
     $def = isset($defar[1]) ? $defar[1] : $defar[0];
 
     if($def!=='' && $def[0]==="'") $def = trim($def,"'");
-    elseif($def!='' &&($def[0] === '@' || $def[0] === '#')) $def = EvalValue($def);
+    elseif($def!='' &&($def[0] === '@' || $def[0] === '#')) $def = astedit::evalValue($def);
     elseif($this->type=='DATE' || $this->type=='DATETIME') {
         if (in_array($def, array('now','{now}'))) $def=date('Y-m-d H:i:s');
         elseif (in_array($def, array('today','{today}'))) $def=date('Y-m-d');
@@ -445,11 +543,11 @@ class CFieldDefinition
 
 class CIndexDefinition
 { # one table field definition
-  var $name = ''; # index name
-  var $expr = ''; # field list, "field1,field2,..."
-  var $unique = 0 ; # Uniqueness
-  var $descending = 0; # 1 if DESCENDING order (MySQL - no support ?)
-  var $derived = 0;
+  public $name = ''; # index name
+  public $expr = ''; # field list, "field1,field2,..."
+  public $unique = 0 ; # Uniqueness
+  public $descending = 0; # 1 if DESCENDING order (MySQL - no support ?)
+  public $derived = 0;
 } # CIndexDefinition class end
 
 class CTableDefinition
@@ -460,120 +558,129 @@ class CTableDefinition
   static $tplMerged = FALSE;
   public $_tplfile = ''; # loaded definition filename (w/o .tpl)
   private $debug = 0;
-
-  var $filename = ''; # file name this def came from (and save to)
-  var $charset = '';
-  var $datacharset = '';
-  var $collate = '';
-  var $id = ''; # Table ID/name
-  var $desc = ''; # Table long title
+  private $toolBar = []; # toolBar html fragments
+  public $filename = ''; # file name this def came from (and save to)
+  public $tabletype = ''; // myisam etc.
+  public $charset = '';
+  public $datacharset = '';
+  public $collate = '';
+  public $id = ''; # Table ID/name
+  public $desc = ''; # Table long title
+  public $imgatt = FALSE;
   public $helppage = ''; # haelp page with instruction text for editing record
-  var $shortdesc = ''; # short title for table
-  var $browsefilter = array(); # filter for browse mode
-  var $browsefilter_fn = ''; # filter as User Defined (Dynamic) function
-  var $childtables = array(); #
-  var $browsewidth = ''; # browsing screen width, value for <table width=NNN[%]>
-  var $browseheight = ''; # if set to some 'XXXpx', scrolling style will be used
+  public $shortdesc = ''; # short title for table
+  public $browsefilter = array(); # filter for browse mode
+  public $browsefilter_fn = ''; # filter as User Defined (Dynamic) function
+  public $childtables = array(); #
+  public $browsewidth = ''; # browsing screen width, value for <table width=NNN[%]>
+  public $browseheight = ''; # if set to some 'XXXpx', scrolling style will be used
   private $blist_height = '100px'; # BLIST area max height, width
-  var $blist_width = '99.9%';
-  var $_pkfield = ''; # Primary Key field name(identified if there is PK-PKA field def
-  var $_pkfields = array(); # array with all fields defined as PRIMARY KEY
-  var $_pkflistset = false;
-  var $rpp = 20 ; # rows per page - browse limit
-  var $pagelinks = 1; # maximal - show ALL pages HREFS, 0-no href, 1-only previous and next
-  var $editformwidth = '100%';
-  var $pagelinksinrow = 25; # how many page links in one row (pages list in the bottom)
-  var $browseorder = ''; # order expression for browsing
-  var $userfilter = '';  # You can add your browse conditions
-  var $search = ''; # search list (comma separated) - to draw & handle search form
-  var $searchcols = 2; # columns per row in the search bar
-  var $bwtextfields = 0; # show text fields mode in browse: 0 - normal, >=1 - TEXTAREA (readonly) (nn of rows)
-  var $groupby = ''; # field1,field2,...| TODO!
-  var $recursive = ''; # field name that is 'parent record's id in the same table
-  var $recursive_show = ''; # field name where we draw PADDING chars/pics, to inform about nesting level
-  var $sumfields = ''; # SUM(data1),AVG(data2),... amust if groupby used !
+  public $blist_width = '99.9%';
+  public $_pkfield = ''; # Primary Key field name(identified if there is PK-PKA field def
+  public $_pkfields = array(); # array with all fields defined as PRIMARY KEY
+  public $_pkflistset = false;
+  public $rpp = 20 ; # rows per page - browse limit
+  public $pagelinks = 1; # maximal - show ALL pages HREFS, 0-no href, 1-only previous and next
+  public $editformwidth = '100%';
+  public $pagelinksinrow = 25; # how many page links in one row (pages list in the bottom)
+  public $browseorder = ''; # order expression for browsing
+  public $userfilter = '';  # You can add your browse conditions
+  public $search = ''; # search list (comma separated) - to draw & handle search form
+  public $searchcols = 1; # columns per row in the search bar
+  public $bwtextfields = 0; # show text fields mode in browse: 0 - normal, >=1 - TEXTAREA (readonly) (nn of rows)
+  public $groupby = ''; # field1,field2,...| TODO!
+  public $recursive = ''; # field name that is 'parent record's id in the same table
+  public $recursive_show = ''; # field name where we draw PADDING chars/pics, to inform about nesting level
+  public $sumfields = ''; # SUM(data1),AVG(data2),... amust if groupby used !
   # buttons for Edit, delete & add actions on browse page
-  var $tabletype = ''; // myisam etc.
-  var $_addcol = 1; # columns in browse table, to show correct placed "ADD" button
-  var $brenderfunc = ''; # if set, this func wil be called to render browse row
-  var $beforeedit = ''; # call this function on source field values before editing
-  var $beforedelete = ''; # call this function before Deleting recors. If this returns FALSE, deletion won't be done
-  var $afteredit  = ''; # call this function on modified values before saving to DB
-  var $afterupdate = ''; # action after update (insert/update/delete) record
-  var $safrm = 0;      #  if non-empty, show simple ADD form in BROWSE-SCREEN last row
-  var $confirmdel = 0; # if non-empty, echo onsubmit=Delconfirm... js call
-  var $recdeletefunc = ''; # override function to perform DELETE record, if returns non-empty string,
-  var $updatefunc = ''; # override normal UPDATE by astedit if You need it
-  var $editform = ''; # function that draws record editing form rather than astedit generating
-  var $editsubform = ''; # function to draw something after edit form echoed(sub-forms, init.code)
-  var $aftereditsubform = ''; # this code will be added after </FORM> tag
-#  var $derived = 0;   # becomes 1 if the table has "parent" definition[s]
-  var $editmode = ''; # ='endless' : after adding/updating record You return to edit form
-  var $dropunknown = 0; # 1: UpgradeTable() will drop 'unknown' fields from table
-  var $canview=1, $canedit = 0; var $candelete = 0; var $caninsert = 0;
-  var $ajaxmode = 0;  # set it to 1 if You need to update browse view in AJAX manner
-  var $wwtoolbar_ready = 0;
-  var $tbrowseid = ''; # unique id for current table views
-  var $parenttables = array(); # internal, holds parent table names list
-  var $fields = array(); # field list (CFieldDefinition)
-
-  var $indexes = array(); # all indexes in the table
-  var $customcol = array(); # additional columns (hrefs, images etc)in Browse:
-  var $viewfields = array(); # fields to view in browse screen, can be overriden by SetView()
-  var $events = array(); # editing-time javascript events for some data types: ['date.onClick']='DateRepair(this)'
-  var $windowededit = 0; # dimensions and start position for standalone editing window
-  var $rowclassfunc = ''; # will be called for every row to get row's css class (browse page)
-  var $ftindexes = array(); # FULLTEXT|f1,f2... sets FULLTEXT index for the table
-  var $_picobj = 0; # will becode CImageManager object if there are linked pictures
-  var $_mouseoverevents = 1; # by default all rows hilighted with onmouseover event
-  var $_wysiwyg = array(); # all WYSIWYG-edited fields will be listed here
-  var $_multipart = 0; # becomes TRUE if 'FILE' filed exist, to add ENCTYPE="multipart/form-data" form tag
+  public $_addcol = 1; # columns in browse table, to show correct placed "ADD" button
+  public $brenderfunc = ''; # if set, this func wil be called to render browse row
+  public $beforeedit = ''; # call this function on source field values before editing
+  public $beforedelete = ''; # call this function before Deleting recors. If this returns FALSE, deletion won't be done
+  public $afteredit  = ''; # call this function on modified values before saving to DB
+  public $afterupdate = ''; # action after update (insert/update/delete) record
+  public $safrm = 0;      #  if non-empty, show simple ADD form in BROWSE-SCREEN last row
+  public $confirmdel = 0; # if non-empty, echo onsubmit=Delconfirm... js call
+  public $recdeletefunc = ''; # override function to perform DELETE record, if returns non-empty string,
+  public $updatefunc = ''; # override normal UPDATE by astedit if You need it
+  public $editform = ''; # function that draws record editing form rather than astedit generating
+  public $editsubform = ''; # function to draw something after edit form echoed(sub-forms, init.code)
+  public $aftereditsubform = ''; # this code will be added after </FORM> tag
+#  public $derived = 0;   # becomes 1 if the table has "parent" definition[s]
+  public $editmode = ''; # ='endless' : after adding/updating record You return to edit form
+  public $dropunknown = 0; # 1: UpgradeTable() will drop 'unknown' fields from table
+  public $canview=1;
+  public $canedit = NULL;
+  public $candelete = NULL;
+  public $caninsert = NULL;
+  public $ajaxmode = 0;  # set it to 1 if You need to update browse view in AJAX manner
+  public $wwtoolbar_ready = 0;
+  public $tbrowseid = ''; # unique id for current table views
+  public $parenttables = array(); # internal, holds parent table names list
+  public $fields = array(); # field list (CFieldDefinition)
+  public $reports = [];
+  protected $extfields = [];
+  public $indexes = array(); # all indexes in the table
+  public $customcol = array(); # additional columns (hrefs, images etc)in Browse:
+  public $viewfields = array(); # fields to view in browse screen, can be overriden by SetView()
+  public $events = array(); # editing-time javascript events for some data types: ['date.onClick']='DateRepair(this)'
+  public $windowededit = 0; # dimensions and start position for standalone editing window
+  public $rowclassfunc = ''; # will be called for every row to get row's css class (browse page)
+  public $ftindexes = array(); # FULLTEXT|f1,f2... sets FULLTEXT index for the table
+  public $_picobj = 0; # will becode CImageManager object if there are linked pictures
+  public $_mouseoverevents = 1; # by default all rows hilighted with onmouseover event
+  public $_wysiwyg = array(); # all WYSIWYG-edited fields will be listed here
+  public $_multipart = 0; # becomes TRUE if 'FILE' filed exist, to add ENCTYPE="multipart/form-data" form tag
 
   # [0]-"file name" field name, [1] - file type (extension) field name, [2]-UDF name to store file (if not standart folder placing)
-  var $_savefile_pm = array();
+  public $_savefile_pm = array();
 
-  var $_converters = array(); # ['myfield'] = 'FieldFuncConvertor'
-  var $_recursive_level = 0; # current level of recursion (to draw left-padding chars)
-  var $_errormessage = ''; # internal var with last error message
-  var $_halign = 'center';
-  var $_drawbrheader = true; # if false, no header in browse screen will be drawn
-  var $_browseheadertags = array(); # user <TD> tags for the header line
-  var $_drawtdid = false; # if true, every <td> in grid will have id
-  var $_auditing = false; # set to function name, to perform auditing tasks (add,update,delete operations)
-  var $_browsetags = array(); # each column can have specific tags in the browse grid
-  var $_frozen = false;
-  var $_udf_js = '';
+  public $_converters = array(); # ['myfield'] = 'FieldFuncConvertor'
+  public $_recursive_level = 0; # current level of recursion (to draw left-padding chars)
+  public $_errormessage = ''; # last error message
+  public $_halign = 'center';
+  public $_drawbrheader = true; # if false, no header in browse screen will be drawn
+  public $_browseheadertags = array(); # user <TD> tags for the header line
+  public $_drawtdid = false; # if true, every <td> in grid will have id
+  public $_auditing = false; # set to function name, to perform auditing tasks (add,update,delete operations)
+  private $updateResult = ''; # string result of add/update record
+  private $fixFields = [];
+  public $errorState = FALSE;
+  public $_browsetags = array(); # each column can have specific tags in the browse grid
+  public $_frozen = false;
+  public $_udf_js = '';
   protected $fullBlistForm = true; // true = draw BLIST items with ID "[x] ID-title"
 
-  var $_updt_all = false; # if true, will override false editcond field property
-  var $_enablesinglequote = false;
+  public $_updt_all = false; # if true, will override false editcond field property
+  public $_enablesinglequote = false;
   protected $clonable = 0; # 1 - clonable (only main record), 2 - record and all child tables data
   protected $clonable_field = '';
   protected $clone_subs = []; # child table[s] ['childtable' => fk_fieldname]
   protected $confirm_clone_child = ''; # confrim text for clone child table recorde
   private $edit_template = FALSE;
-  var $_togglefilters = 1; # hideable search toolbar
-  var $_viewmode = false; # in VIEW mode no edition possible, all row when clicked, opens "details" for view (func.
-  var $_undo_upgrade = true; # safe structure upgrade, false - unsafe
-  var $_prefixeditfield = false; # if true, add trable_name to generated <input> tags for fields,
-  var $_multiselect = '';
-  var $_multiselectFunc = '';
-  var $_adjacentLinks = 4;
-  var $_edit_jscode = ''; # javascript code template to be called at 'EDIT' event
-  var $reset_chain = array(); # reset current filters chains when "parent" filter is changed
+  public $_togglefilters = 1; # hideable search toolbar
+  public $_viewmode = false; # in VIEW mode no edition possible, all row when clicked, opens "details" for view (func.
+  public $_undo_upgrade = true; # safe structure upgrade, false - unsafe
+  public $_prefixeditfield = false; # if true, add trable_name to generated <input> tags for fields,
+  public $_multiselect = '';
+  public $_multiselectFunc = '';
+  public $_adjacentLinks = 4;
+  public $_edit_jscode = ''; # javascript code template to be called at 'EDIT' event
+  public $reset_chain = array(); # reset current filters chains when "parent" filter is changed
   private $file_folder = ''; # Folder to store uploaded files
   protected $baseuri = '';
   protected $_jscode = '';
   private $_inJs = false; # going lines inside <script> ... </script> block
   private $onsubmit = false; # js code for "obsubmit" form tag
   private $strt_time = 0;
+  public $filterPrefix = '';
 
   # constructor (works in PHP5+)
 /*  function __construct() {
       if(constant('ADJACENTLINKS')) $this->_adjacentLinks = intval(constant('ADJACENTLINKS'));
   }
 */
-  function GetVersion() { return Astedit::VERSION; }
+  public static function GetVersion() { return Astedit::VERSION; }
   /**
   * @desc Set editor for WYSIWYG fields, editors supported : 'spaw', 'tinymce'.
   */
@@ -594,6 +701,8 @@ class CTableDefinition
       if ($width) $this->blist_width = $width;
   }
 
+  # returns string "success|error" for last update operation
+  public function getUpdateResult() { return $this->updateResult; }
   /**
   * @desc ParseTplDef() reads table structure from tpl meta-file
   */
@@ -636,21 +745,19 @@ class CTableDefinition
         # charset converting to whole string if needed
         $tar = explode('|', $strk);
 
-#        if(count($tar)<2 && $tar[0]) continue;
         if(!isset($tar[1])) $tar[1] = '';
         $key = strtoupper($tar[0]);
         if ($key==='IF') { # Conditional declaration: IF|{EXPRESSION}|FIELD... etc.
             array_shift($tar);
             if (count($tar)<3) contiue; # wrong IF line
             $ifExp = array_shift($tar);
-            $evaluated = EvalValue($ifExp);
-            if(EvalValue($ifExp)) {
+            $evaluated = astedit::evalValue($ifExp);
+            if($evaluated) {
                 $key = $tar[0];
             }
             else continue;
         }
-        switch($key)
-        { #<4>
+        switch($key) { #<4>
         case 'RPP':
           $this->rpp = intval($tar[1])? intval($tar[1]):20;
           break;
@@ -669,27 +776,20 @@ class CTableDefinition
           }
           else {
               $this->charset = strtoupper($tar[1]);
-              if($this->charset=='UTF8') $this->charset = 'UTF-8';
           }
+          $this->charset = astedit::evalValue($tar[1]);
+          if(strtoupper($this->charset)=='UTF8') $this->charset = 'UTF-8';
           break;
 
         case 'DATACHARSET':
-          if (substr($tar[1],0,1) ==='@') {
-              $setfunc = substr($tar[1],1);
-              if (is_callable($setfunc))
-                $this->datacharset = call_user_func($setfunc);
-          }
-          else {
-              $this->datacharset = strtoupper($tar[1]);
-              if($this->datacharset=='UTF8') $this->datacharset = 'UTF-8';
-          }
+            $this->datacharset = astedit::evalValue($tar[1]);
+            if(strtoupper($this->datacharset)=='UTF8') $this->datacharset = 'UTF-8';
           break;
         case 'HELPPAGE':
           $this->helppage = trim($tar[1]); # help page ID (base HTML file name)
 
         case 'COLLATE':
           $this->collate = strtoupper($tar[1]); # Cyrillic UTF: utf8_general_ci
-          if($this->charset=='UTF8') $this->charset = 'UTF-8';
           break;
         case 'ID':
           $this->id = str_ireplace(Astedit::PREFIX_MACRO,self::$ast_tableprefix,trim($tar[1]));
@@ -705,7 +805,13 @@ class CTableDefinition
           $this->shortdesc = $tar[1];
           break;
         case 'BRFILTER':
-          $brlist = explode(',', $tar[1]);
+          if(substr($tar[1],0,1)==='@') {
+              $func = substr($tar[1],1);
+              if(is_callable($func)) $oneFilter = call_user_func($func, $this->id);
+              else $oneFilter = FALSE;
+          }
+          else $oneFilter = $tar[1];
+          $brlist = explode(',', $oneFilter);
           $this->browsefilter = array_merge($this->browsefilter, $brlist);
           break;
         case 'BRFILTERFN':
@@ -723,7 +829,10 @@ class CTableDefinition
               if (strpos($this->browsewidth,'%')===FALSE)
                 $this->browsewidth = min($this->browsewidth, constant('IF_LIMIT_WIDTH'));
           }
+          $intVal = intval($this->browsewidth);
+          if("$this->browsewidth" === "$intVal") $this->browsewidth .= 'px';
           break;
+
         case 'EDITFORMWIDTH':
           $this->editformwidth = $tar[1];
           if (defined('IF_LIMIT_WIDTH')) { # restrict maximal grid width, if IF_LIMIT_WIDTH set
@@ -731,9 +840,25 @@ class CTableDefinition
                 $this->editformwidth = min($this->editformwidth, constant('IF_LIMIT_WIDTH'));
           }
           break;
-        case 'SEARCH':
-          $this->search .= ($this->search==''? '':',').$tar[1];
+        case 'LOADJSCODE':
+          # callback for getting js code block OR javascript file name (2025-07-10)
+          $loaderFn = $tar[1] ?? '';
+          if(is_callable($loaderFn)) {
+              $this->_jscode .= call_user_func($loaderFn, $this->id);
+          }
+          elseif(is_file($loaderFn)) $this->_jscode .= file_get_contents($loaderFn);
           break;
+
+        case 'SEARCH':
+          $expr = $tar[1];
+          if(substr($expr,0,1)==='@') {
+              $func = substr($expr, 1);
+              if(is_callable($func)) $expr = call_user_func($func);
+              else $expr = '';
+          }
+          if($expr) $this->search .= ($this->search==''? '':',') . $expr;
+          break;
+
         case 'SEARCHCOLS':
           $this->searchcols = intval($tar[1]);
           break;
@@ -752,7 +877,7 @@ class CTableDefinition
           break;
         case 'SAFRM': # Simple Adding Form in last row
           $vl = empty($tar[1]) ? '' : $tar[1];
-          $this->safrm = EvalValue($vl);
+          $this->safrm = astedit::evalValue($vl);
           if(empty($this->safrm)) $this->safrm = '';
           break;
         case 'CONFIRMDEL': case 'CONFIRMDELETE':
@@ -789,7 +914,7 @@ class CTableDefinition
                   if (count($citem)>=4) $this->childtables[] = array('table'=>$citem[0], 'field'=>$citem[1], 'childfield'=>$citem[2],
                     'condition'=>'','protect'=>$citem[3],'_func'=>FALSE);
               }
-#              file_put_contents('_st.log', print_r($this->childtables,1));
+              #  file_put_contents('_st.log', print_r($this->childtables,1));
           }
           break;
         case 'PAGELINKS':
@@ -901,7 +1026,8 @@ class CTableDefinition
           $this->_auditing = $tar[1];
           break;
         case 'FILEFOLDER':
-          $this->file_folder = trim($tar[1]);
+          $this->file_folder = astedit::evalValue(trim($tar[1]));
+          # FileFolder can be user callback func
           break;
 
         case 'BLISTSIZE': // BLISTSIZE|200px [|100px] - Height and width of BLIST field while edit
@@ -966,14 +1092,14 @@ class CTableDefinition
                  $fld->length = ''; # error length protect
           $fld->notnull = (!empty($tar[7]) || $notNull);
           $fld->defvalue = isset($tar[8])?$tar[8]:'';
-          $fld->showcond = empty($tar[9])? '' : EvalValue($tar[9]);
+          $fld->showcond = empty($tar[9])? '' : astedit::evalValue($tar[9]);
 
           $fld->showformula = empty($tar[10])? '' : trim($tar[10]);
 
           if ($fld->showformula !=='') {
               $splt = explode(',',$fld->showformula);
               $fld->showformula = array_shift($splt);
-              $fld->showattr = $splt; # [0]=text-align,[1]-bgcolor(may be @function),[2]-reserved
+              $fld->showattr = $splt; # [0]=text-align,[1]-bgcolor(may be @function),[2]-css class in grid
           }
           $fld->editcond = empty($tar[11])? 0 : trim($tar[11]);
           $trimmedType = trim($tar[12]);
@@ -1001,6 +1127,8 @@ class CTableDefinition
           $fld->showhref = empty($tar[14])? '' : trim($tar[14]);
           $fld->hrefaddon = empty($tar[15])? '' : trim($tar[15]); # доп.атрибуты для <a href>
           $fld->afterinputcode = isset($tar[16])? $tar[16] : '';
+
+          if(!empty($tar[17])) $fld->editRowClass = trim($tar[17]);
 
           if ($key === 'EXTFIELD') {
               $fld->external = TRUE;
@@ -1042,12 +1170,46 @@ class CTableDefinition
           break;
         case 'CUSTOMCOLUMN': # non-field columns in browse page #ex-BRCUSTOMHREF
           $htmlcode  = isset($tar[1])? $tar[1] : '';
+          if(!empty($htmlcode)) $htmlcode = astedit::evalValue($htmlcode, $this->id);
           $htitle  = isset($tar[2])? $tar[2] : '';
           $addon = isset($tar[3])? $tar[3] : ''; # доп.атрибуты для <a href="" ...>
           if(!empty($htmlcode)) {
             $this->customcol[] = array('htmlcode'=>$htmlcode, 'title'=>$htitle, 'addon'=>$addon,'derived'=>$ischild);
             $cnt = count($this->customcol)-1;
           }
+          break;
+
+        case 'REPORT':
+          $rep_id = !empty($tar[1]) ? $tar[1] : ('report'.(count($this->reports)+1));
+          $rep_fields = $tar[2] ?? '';
+          $rep_filter = $tar[3] ?? '';
+          $rep_label = $tar[4] ?? '';
+
+          if(!empty($rep_label)) $rep_label = astedit::evalValue($rep_label, [$this->id, $rep_id]);
+          $rep_title = $tar[5] ?? '';
+          if(!empty($rep_title)) $rep_title = astedit::evalValue($rep_title, [$this->id, $rep_id]);
+
+          $this->reports[$rep_id] = [
+            'fields' => $rep_fields,
+            'filter' => $rep_filter,
+            'label' => $rep_label,
+            'title' => $rep_title,
+          ];
+          if(is_callable('asteditReport::getReportButtonHtml')) {
+            $reportButton = asteditReport::getReportButtonHtml($this->id, $rep_id, $rep_label,$rep_title);
+          }
+          else {
+            # auto-add HTML button on toolbar (for executing report)
+            $rTitle = $rep_title ? "title='$rep_title'" : '';
+            $reportButton = "<input type=\"button\" id=\"$rep_id\" class=\"btn\" value=\"$rep_label\" "
+              . "onclick=\"asteditReport.run('$this->id','$rep_id')\" $rTitle/>";
+          }
+          $this->toolBar[] = $reportButton;
+          break;
+
+        case 'TOOLBAR': # HTML code for toolbar (buttons etc.)
+          $htmlcode  = isset($tar[1])? $tar[1] : '';
+          if($htmlcode) $this->toolBar[] = astedit::evalValue($htmlcode, $this->id);
           break;
         case 'RECURSIVE':
           $this->recursive = $tar[1];
@@ -1061,7 +1223,7 @@ class CTableDefinition
           $this->_multiselect=true;
           $this->_multiselectFunc = isset($tar[1]) ? trim($tar[1]) : '';
           break;
-        case 'TYPE':
+        case 'TYPE': case 'ENGINE':
           $this->tabletype = $tar[1];
           break;
         case 'RESETCHAIN':
@@ -1069,8 +1231,18 @@ class CTableDefinition
           break;
 
         case 'RIGHTS': # rights|funcName - should return array with up to 4 items: [view,edit,delete,insert]. No value means "no right"
-          if (!empty($tar[1]) && (is_callable($tar[1]))) {
+          # OR: RIGHTS|NV|NE|ND|NA : NV - view right, NE-edit, ND-delete, NA-add
+          if (!empty($tar[1])) {
+            if(is_callable($tar[1])) {
               list($this->canview, $this->canedit, $this->candelete, $this->caninsert) = call_user_func($tar[1], $this->id);
+            }
+            else {
+                $this->canview = $tar[1] ?? FALSE;
+                $this->canedit = $tar[2] ?? FALSE;
+                $this->candelete = $tar[3] ?? FALSE;
+                $this->caninsert = $tar[4] ?? FALSE;
+                # writeDebugInfo("rights list:VIEW=[$this->canview]EDIT=[$this->canedit]DEL=[$this->candelete]A=[$this->caninsert]");
+            }
           }
           break;
 
@@ -1158,7 +1330,7 @@ class CTableDefinition
     $fld->showhref = $showhref;
     $fld->hrefaddon = $hrefaddon;
     $this->fields[$fldid] = $fld;
-    if(EvalValue($fld->showcond)) $this->viewfields[] = $fldid;
+    if(astedit::evalValue($fld->showcond)) $this->viewfields[] = $fldid;
     return true;
   }
   function SetRecursive($fldname='',$showrecursion='') {
@@ -1202,7 +1374,7 @@ class CTableDefinition
   * @param $ischild - flag that means this is a child table
   */
   function ReadDefinition($fileName, $csetTo='', $foredit=0, $ischild=0) {
-
+    # writeDebugInfo("$fileName, set to: [$csetTo]");
     $fext = strtolower(substr($fileName,-4));
     $this->_tplfile = $src_file = $fileName;
     $folders = self::$tplFolder;
@@ -1240,11 +1412,13 @@ class CTableDefinition
      if(function_exists('AstStructModifier')) AstStructModifier($this);
      $this->filename = $fileName;
      foreach($this->fields as $fld) {
-       if(EvalValue($fld->showcond)) $this->viewfields[] = $fld->id;
+       if(astedit::evalValue($fld->showcond)) $this->viewfields[] = $fld->id;
      }
      if($csetTo=='') $csetTo = MAINCHARSET;
-#     echo "$filename: csetto:$csetTo charset = {$this->charset}" . ($this->charset==$csetTo ? ' equeal':' not equal!');
-     if($this->charset!='' && $csetTo!=$this->charset && is_string($csetTo)) $this->ConvertCharSet($csetTo);
+     if($this->charset!='' && $csetTo!=$this->charset && is_string($csetTo)) {
+         # writeDebugInfo("calling ConvertCharSet to [$csetTo]");
+         $this->ConvertCharSet($csetTo);
+     }
 
      if(empty($foredit) && count($this->parenttables)) {
        foreach($this->parenttables as $parentname) {
@@ -1253,7 +1427,7 @@ class CTableDefinition
          foreach($parent->fields as $fid=>$f) {
            if(isset($this->fields[$fid])) continue;
            $this->fields[$fid] = $f;
-           if(EvalValue($f->showcond)) $this->viewfields[] = $f->id;
+           if(astedit::evalValue($f->showcond)) $this->viewfields[] = $f->id;
          }
          if(count($parent->_pkfields)) $this->_pkfields = array_merge($this->_pkfields,$parent->_pkfields);
          $this->childtables = array_merge($this->childtables,$parent->childtables);
@@ -1356,15 +1530,15 @@ class CTableDefinition
   function BrowseHeader() { # returns "<tr>...</tr>" for browsing header row
      global $self, $cursortfld,$as_cssclass, $cursortord,$astbtn;
      $rowclass = defined('USE_JQUERY_UI') ? 'ui-jqgrid-labels' : $as_cssclass['trowhead']; # ui-jqgrid-labels
-     $tdclass = defined('USE_JQUERY_UI') ? 'ui-state-default ui-th-column' : $as_cssclass['tdhead']; # ui-widget-header ui-th-div-ie
+     $tdclass = defined('USE_JQUERY_UI') ? 'ui-th-column' : $as_cssclass['tdhead']; # ui-widget-header ui-th-div-ie
      $ret = "<thead><tr class=\"$rowclass\">\n";
      $tcnt = 0;
      $this->_addcol = 1;
      if(!isset($cursortfld))
-       $cursortfld = empty($_SESSION['ast_sortfld_'.$this->id])? '':$_SESSION['ast_sortfld_'.$this->id];
+       $cursortfld = $_SESSION[$this->filterPrefix.'ast_sortfld_'.$this->id] ??  '';
 
      if(!isset($cursortord))
-         $cursortord = isset($_SESSION['ast_sortord_'.$this->id])? $_SESSION['ast_sortord_'.$this->id] : 0;
+         $cursortord = $_SESSION[$this->filterPrefix.'ast_sortord_'.$this->id] ?? '0';
 
      if(!empty($this->groupby)) {
        $flds = explode(',', $this->groupby);
@@ -1409,13 +1583,14 @@ class CTableDefinition
           $tcnt++;
        }
      }
+     $btWidth = $astbtn['w'] ?? 16;
      if($this->canedit && empty($this->_viewmode)  && count($this->_pkfields)) {# add href for editing row
-       $ret .= "<th class='$tdclass' width='{$astbtn['w']}'>&gt;&gt;</th>\n";
+       $ret .= "<th class='$tdclass' width='$btWidth'><i class='bi bi-pencil'></i></th>\n";
        $tcnt++;
      }
 #     $ret .= '<td><a href="'.$_SERVER['PHP_SELF']."?action=edit&id=$id</td>";
      if(($this->candelete) && empty($this->_viewmode) && count($this->_pkfields)){# add href for delete
-       $ret .= "<th class='$tdclass' width='{$astbtn['w']}'>X</th>\n";
+       $ret .= "<th class='$tdclass' width='$btWidth'><i class='bi bi-x'></i></th>\n";
        $tcnt++;
      }
      if($this->_multiselect) { # checkboxes in the header and every grid row, for multi-selecting
@@ -1427,7 +1602,7 @@ class CTableDefinition
      if($this->_viewmode) { $ret .="<th class='$tdclass'>&nbsp;</th>"; $tcnt++; }
      $ret .= "</tr></thead>\n";
      # delimiter row:
-#     $ret .= "<tr><td colspan=\"$tcnt\" class=\"head\"><span style='font-size:2px;'>&nbsp</span></td></tr>\n";
+     # $ret .= "<tr><td colspan=\"$tcnt\" class=\"head\"><span style='font-size:2px;'>&nbsp</span></td></tr>\n";
      return $ret;
   } # BrowseHeader()
   function AddSearchFields($strlist) {
@@ -1444,11 +1619,13 @@ class CTableDefinition
      if(empty($this->search)) return;
      $showreset=0;
      $tid = 'flt_'.$this->tbrowseid; # id in $_SESSION
+     if(!empty($this->filterPrefix))
+        $tid = $this->filterPrefix . '-' . $tid;
 
      $searchcoll = explode(',',$this->search);
      if(count($searchcoll)<1) return;
-     $sbody = "<!-- astedit search bar -->\n<div style=\"text-align:center;width:auto;\">
-       <table class='astedit-search' style='margin-left:auto;margin-right:auto;'>\n"; # astedit-search
+     $sbody = "<!-- astedit search bar -->\n
+       <table class='table mx-auto w-auto border-primary table-light'>\n"; # astedit-search
      $envelope = array('',''); #search bar envelope
      $icol = 0;
      $rowstarted = false;
@@ -1473,8 +1650,8 @@ class CTableDefinition
              $fname = $fsplit[0];
              $ffunc = is_callable($fsplit[1])?$fsplit[1]:'';
          }
-         $values = array();
-         if(isset($_SESSION[$tid])) $values = $_SESSION[$tid];
+
+         $values = $_SESSION[$tid] ?? [];
        # TODO : field=2 is not good for SELECTED
          if (!isset($this->fields[$fname])) continue; # wrong field name
          $fld = $this->fields[$fname];
@@ -1496,10 +1673,12 @@ class CTableDefinition
            $rowstarted = true;
            $sbody .= "<tr>"; #  class='{$as_cssclass['troweven']}'>";
        }
-       $formcode = "<form name='search{$isc}' method='post'><input type='hidden' name='ast_act' value='setfilter'><input type='hidden' name='flt_name' value='{$fname}' />";
-       $sbody .= "<td style='text-align:right;margin-left:auto;margin-right:auto;white-space: nowrap;'>$formcode"
-        . " <table style='width:100%'><tr><td style='vertical-align:top; text-align:right; white-space: nowrap; width:90% !important'>$searchcode</td>"
-        . " <td><input type='submit' {$btnclass} name='ast_submit_flt' value='{$ast_tips['setfilter']}'></td>";
+       $formcode = "<form name='search{$isc}' method='post'>
+                      <input type='hidden' name='ast_act' value='setfilter'>
+                      <input type='hidden' name='flt_name' value='{$fname}' />";
+       $sbody .= "<td class='nowrap'>$formcode"
+        . " <table><tr><div class='d-flex justify-content-end'><div>$searchcode</div>&nbsp;"
+        . " <input type='submit' {$btnclass} name='ast_submit_flt' value='{$ast_tips['setfilter']}'>";
 
        if(true) { # ($showreset) add 'RESET' mini-form (one button !)
          if($fltfunc) {
@@ -1510,14 +1689,10 @@ class CTableDefinition
             $fld_id = $fld->id;
             $disabl = isset($_SESSION[$tid][$fld->id]) ? '':'disabled="disabled"';
          }
-/*         $sbody .="<form action='{$this->baseuri}' method='post'>
-         <input type=hidden name=ast_act value='resetfilter'><input type=hidden name='flt_name' value='$fld_id'>";
-*/
-#         $sbody .="<input type='hidden' name='flt_name' value='$fld_id'>";
-         $sbody .="<td><input type='submit' name='clearfilter' $btnclass value=\"{$ast_tips['tipresetfilter']}\" $disabl /></td>";
+         $sbody .="&nbsp;&nbsp;<input type='submit' name='clearfilter' $btnclass value=\"{$ast_tips['tipresetfilter']}\" $disabl />";
        }
-       else $sbody .='<td>&nbsp;</td>'; # fill table row for looking good
-       $sbody .="</tr></table></form></td>\n";
+      //  else $sbody .='<td>&nbsp;</td>'; # fill table row for looking good
+       $sbody .="</div></tr></table></form></td>\n";
 
        if($rowstarted && ($icol >= $this->searchcols))
        {
@@ -1530,13 +1705,13 @@ class CTableDefinition
      if($rowstarted) $sbody .= '</tr>'; # vaild table row ending !
      if(!empty($ast_hidesearchbar)) {
        $envelope[0]="<table border=0 cellspacing=0 cellpadding=0><td id='' valign='top'><a href='javascript:#' onclick='alert(\"Show/Hide\")'>[+]</a></td>
-       <td id='astedit_searchbar' _width='100%'>";
+       <td id='astedit_searchbar'>";
        $envelope[1]="</td></tr></table>";
      }
-     $sbody = $envelope[0].$sbody."</table><div>\n<!-- search bar end -->\n".$envelope[1];
+     $sbody = $envelope[0].$sbody."</table>\n<!-- search bar end -->\n".$envelope[1];
      if($this->_togglefilters) {
        $state = !empty($_COOKIE['ast_hidesearch']);
-       $srdisp = ($state)? 'style="display:none"':'';
+       $srdisp = ($state)? 'show':'';
        $tgltitle= isset($ast_tips['title_showsearchbar']) ? $ast_tips['title_showsearchbar']:'Show/hide search';
        if (defined('USE_JQUERY_UI')) {
            $curClass = ($state) ? 'ui-icon-triangle-1-s': 'ui-icon-triangle-1-n';
@@ -1546,8 +1721,23 @@ class CTableDefinition
            $btimg = ($state)? 'plus.gif':'minus.gif';
            $htmlToggle = "<a href=\"#\" onclick=\"return ToggleSearchBar()\"><img id=\"img_srchhide\" src=\"".IMGPATH.$btimg."\" border=0 width=12 height=12 title=\"$tgltitle\"/></a>";
        }
-       $sbody = "<table border=0 cellspacing=0 cellpadding=0><tr class='odd'><td>$htmlToggle</td><td style='width:100%'> &nbsp;</td></tr>
-     <tr id=\"tr_astsearchbar\" $srdisp ><td colspan=2>$sbody</td></tr></table>";
+
+
+     $sbody = "<div class='accordion'>
+     <div class='accordion-item'>
+        <h2 class='accordion-header' id='panelsStayOpen-headingOne' onclick=\"ToggleSearchBar()\" title='$tgltitle'>
+          <button class='accordion-button' type='button' data-bs-toggle='collapse' data-bs-target='#tr_astsearchbar' aria-expanded='$state' aria-controls='tr_astsearchbar'>
+          <i class='bi bi-search'></i>&nbsp;Искать
+          </button>
+        </h2>
+        <div id='tr_astsearchbar' class='accordion-collapse collapse bg-light $srdisp' aria-labelledby='panelsStayOpen-headingOne'>
+          $sbody
+        </div>
+      </div>
+      </div>";
+
+
+
      }
      echo $sbody;
 
@@ -1566,7 +1756,7 @@ class CTableDefinition
     return $ret;
   }
   # for "001|MMM|..." builds WHERE expression: pkfld1='001' AND pkfld2='MMM' ...
-  private function __pkeqexpression($values) {
+  public function pkEqExpression($values) {
     $valar = is_array($values)? $values : explode(AST_PKDELIMITER,$values);
     $ret = [];
     foreach($this->_pkfields as $kk=>$fldName) {
@@ -1592,8 +1782,11 @@ class CTableDefinition
     $clsattr = ($rowcls) ? "class='$rowcls'" : '';
     $ret = ($ajax==0)? "<tr id='ast_brow{$pkvalid}' $clsattr>":''; # class='$cls' {$moe}
     if(!empty($this->groupby) && !empty($this->sumfields)){
-      while(list($skey, $sval) = each($ast_datarow)) # for($k=0; $k<count($ast_datarow); $k++)
-      $ret .= "  <td align=right>$sval</td>\n";
+      // while(list($skey, $sval) = each($ast_datarow)) # for($k=0; $k<count($ast_datarow); $k++) each() -> Relying on this function is highly discouraged in php8
+      // $ret .= "  <td align=right>$sval</td>\n";
+      foreach($ast_datarow as $sval){
+        $ret .= "  <td align='right'>$sval</td>\n";
+      }
     }
     else
     foreach($this->viewfields as $fno=>$fid) {
@@ -1602,7 +1795,7 @@ class CTableDefinition
 
       $fdef = isset($this->fields[$fid]) ? $this->fields[$fid] : 0;
 
-      if (is_callable($fdef->getter)) {
+      if (!empty($fdef->getter) && is_callable($fdef->getter)) {
           $ast_datarow[$fid] = call_user_func($fdef->getter, $ast_datarow);
       }
       $val = isset($ast_datarow[$fid]) ? $ast_datarow[$fid] : '';
@@ -1610,10 +1803,10 @@ class CTableDefinition
       if(empty($tdtags) && is_object($fdef) /*&& substr($this->fields[$fid]->edittype,0,6)!=='SELECT'*/) {
           $tdstyle = '';
           $cls = array();
-          if (!empty($fdef->showattr[0])) $tdstyle .="text-align:" . $fdef->showattr[0] . ';';
-          if (!empty($fdef->showattr[1])) { if ($at=evalValue($fdef->showattr[1], $val)) $tdstyle .="color:$at;"; }
-          if (!empty($fdef->showattr[2])) { if ($at=evalValue($fdef->showattr[2], $val)) $tdstyle .="background-color:$at;"; }
-          if (!empty($fdef->showattr[3])) { if ($at=evalValue($fdef->showattr[3], $val)) $cls[] = $at; }
+          if (!empty($fdef->showattr[0])) $tdstyle .="text-align:" . $fdef->showattr[0] . ';text-wrap:nowrap;';
+          if (!empty($fdef->showattr[1])) { if ($at=astedit::evalValue($fdef->showattr[1], $val)) $tdstyle .="color:$at;"; }
+          if (!empty($fdef->showattr[2])) { if ($at=astedit::evalValue($fdef->showattr[2], $val)) $tdstyle .="background-color:$at;"; }
+          if (!empty($fdef->showattr[3])) { if ($at=astedit::evalValue($fdef->showattr[3], $val)) $cls[] = $at; }
           if (!$tdstyle) {
               if ( $this->fields[$fid]->type === 'DECIMAL' ) $cls[] = 'ast-td-dec';
               elseif ( in_array($this->fields[$fid]->type, array('INT','TINYINT','BIGINT','INTEGER'))) {
@@ -1658,7 +1851,7 @@ class CTableDefinition
         foreach($this->customcol as $custcol) {
           $turl = $custcol['htmlcode'];
           $addon = empty($custcol['addon'])?'':$custcol['addon'];
-          if(substr($turl,0,1)=='@') $turl = EvalValue($turl, $ast_datarow);
+          if(substr($turl,0,1)=='@') $turl = astedit::evalValue($turl, $ast_datarow);
           else $turl = str_replace('{ID}',$id, $turl);
           $ret .="<td id=\"$tdid\" nowrap $addon>$turl</td>\n"; # empty placeholder for "link"
         }
@@ -1672,13 +1865,13 @@ class CTableDefinition
            elseif (is_array($this->canedit)) { # get biggest eval from all array items
               $canedit_rec = 0;
               foreach($this->canedit as $item) {
-                  $caned = (is_callable($item)) ? call_user_func($item,$ast_datarow) : evalValue($item);
+                  $caned = (is_callable($item)) ? call_user_func($item,$ast_datarow) : astedit::evalValue($item);
                   $canedit_rec = max($canedit_rec, $caned);
               }
            }
 
            if(($canedit_rec) && empty($this->_viewmode)) {# add href/form for editing row
-             $ret .="<td class='ct'>" . (defined('USE_JQUERY_UI')? "<span class='ui-state-default ui-icon ui-icon-pencil pnt' onclick=\"AstDoAction('edit','$id')\" title=\"{$ast_tips['tipedit']}\"></span>" :
+             $ret .="<td class='text-center'>" . (defined('USE_JQUERY_UI')? "<span role='button' onclick=\"AstDoAction('edit','$id')\" title=\"{$ast_tips['tipedit']}\"><i class='bi bi-pencil-square font12'></i></span>" :
                "<img border=0 src=\"{$astbtn['edit']}\" onclick=\"AstDoAction('edit','$id')\" {$this->imgatt} />")
                .'</td>';
            }
@@ -1688,21 +1881,21 @@ class CTableDefinition
        }
 
        if(!empty($this->candelete) && empty($this->_viewmode)) { # add href for delete
-#         $this->confirmdel = (substr($vl,0,1)=='@') ? EvalValue($vl) : $vl;
+         # $this->confirmdel = (substr($vl,0,1)=='@') ? astedit::evalValue($vl) : $vl;
          if (is_scalar($this->candelete))
-            $delthis = is_callable($this->candelete)? call_user_func($this->candelete,$ast_datarow) : EvalValue($this->candelete);
+            $delthis = is_callable($this->candelete)? call_user_func($this->candelete,$ast_datarow) : astedit::evalValue($this->candelete);
          elseif (is_array($this->candelete)) {
              $delthis = 0;
              foreach($this->candelete as $item) {
-                 $onedel = is_callable($item)? call_user_func($item,$ast_datarow) : EvalValue($item);
+                 $onedel = is_callable($item)? call_user_func($item,$ast_datarow) : astedit::evalValue($item);
                  $delthis = max($delthis, $onedel);
              }
          }
-#         $delthis = EvalValue($this->candelete); # can be deleted THIS record ?
+         # $delthis = astedit::evalValue($this->candelete); # can be deleted THIS record ?
          if($delthis) {
            $onclick = "AstDoAction('delete','$id')";
            $ret .= "<td>" . (defined('USE_JQUERY_UI') ?
-              "<span class='ui-state-default ui-icon ui-icon-trash pnt' onclick=\"$onclick\" title=\"{$ast_tips['tipdelete']}\"></span>" :
+              "<span role='button' onclick=\"$onclick\" title=\"{$ast_tips['tipdelete']}\"><i class='bi bi-trash text-danger font12'></i></span>" :
             "<input name=\"submit\" type=\"image\" border=0  src=\"{$astbtn['del']}\" onclick=\"$onclick\"
             title=\"{$ast_tips['tipdelete']}\" {$this->imgatt} />") . '</td>';
          }
@@ -1724,7 +1917,7 @@ class CTableDefinition
        $filterrec = "{$this->recursive}='".$ast_datarow[$this->_pkfields[0]]."'"; # <TODO> !!!
        $qryrec = "SELECT * FROM {$this->id} WHERE $filterrec".($this->browseorder ? " ORDER BY {$this->browseorder}":'');
        $lnkrec = Astedit::$db->sql_query($qryrec);
-       if(is_resource($lnkrec) && Astedit::$db->affected_rows()>0) {
+       if(($lnkrec) && Astedit::$db->affected_rows()>0) {
          $this->_recursive_level++;
          $subno = $no+1;
          while(($ast_datarow=Astedit::$db->fetch_assoc($lnkrec))) {
@@ -1754,7 +1947,7 @@ class CTableDefinition
           $val = (isset($rowdata[$fldid]) ? $rowdata[$fldid] : ''); #$fld->id.' - NO FIELD !');
           $shfunc = $fld->showformula;
           if(!empty($shfunc)) {
-             $val = EvalValue($shfunc, $val);
+             $val = astedit::evalValue($shfunc, $val);
              if(is_array($val)) $val = 'N/A:'.$val;
           }
           elseif($efmt[0] === 'CHECKBOX') {
@@ -1828,16 +2021,18 @@ class CTableDefinition
 
      if(is_array($this->browsefilter) && count($this->browsefilter)>0) {
          foreach($this->browsefilter as $flt) {
-             if (!empty($flt) && ($realflt = EvalValue($flt))) $filt[] = "($realflt)";
+             if (!empty($flt) && ($realflt = astedit::evalValue($flt))) $filt[] = "($realflt)";
          }
      }
      elseif (is_string($this->browsefilter) && $this->browsefilter!=='') $filt[] = "($this->browsefilter)";
 
      if(!empty($this->userfilter)) $filt[] = '('.$this->userfilter . ')';
 
-#     WriteDebugInfo('final filter:', $filt, 'browsefilter:', $this->browsefilter);
+     # WriteDebugInfo('final filter:', $filt, 'browsefilter:', $this->browsefilter);
      # add to filter all $_SESSION['flt_tableName'][...] values, come from search forms
      $fltid = 'flt_'.$this->tbrowseid;
+     if(!empty($this->filterPrefix)) $fltid = $this->filterPrefix . '-' . $fltid;
+
      $sflds = explode(',',$this->search);
      foreach($sflds as $fldid) { #<3> - for
        $f_arr = explode('^',$fldid);
@@ -1864,7 +2059,7 @@ class CTableDefinition
          $fltexpr = call_user_func($this->_converters[$fname],$fval);
        else {
          $b_exact = true;
-         if(is_array($fval) && count($fval>1)) { # range search for field
+         if( is_array($fval) && count($fval)>1 ) { # range search for field
             $val1 = (substr($fld->type,0,4)==='DATE') ? dateRepair($fval[0]) : $fval[0];
             $val2 = (substr($fld->type,0,4)==='DATE') ? dateRepair($fval[1]) : $fval[1];
             $fexpr = array();
@@ -1921,7 +2116,7 @@ class CTableDefinition
         $sqlqry = "SELECT $this->groupby,$this->sumfields FROM $this->id";
     }
     else $sqlqry = "SELECT * FROM {$this->id}";
-    $sqlqry .= " WHERE ".$this->__pkeqexpression($pkid); #{$this->_pkfield}='{$pkid}'";
+    $sqlqry .= " WHERE ".$this->pkEqExpression($pkid); #{$this->_pkfield}='{$pkid}'";
     $lnk = Astedit::$db->sql_query($sqlqry);
     if(($lnk) && ($ast_datarow = Astedit::$db->fetch_assoc($lnk))) {
       $ret=$this->BrowseRow(0,1);
@@ -1931,36 +2126,42 @@ class CTableDefinition
     return $ret;
   }
   function ClearCurPageNo() {
-      if(isset($_SESSION[$this->tbrowseid]['page']))
-        unset($_SESSION[$this->tbrowseid]['page']);
+      if(isset($_SESSION[$this->filterPrefix.$this->tbrowseid]['page']))
+        unset($_SESSION[$this->filterPrefix.$this->tbrowseid]['page']);
+  }
+  public function prepareOrder() {
+     global $cursortfld, $cursortord;
+     if(empty($cursortfld)) {
+        $cursortfld = $_SESSION[$this->filterPrefix.'ast_sortfld_'.$this->id] ?? '';
+        $cursortord = $_SESSION[$this->filterPrefix.'ast_sortord_'.$this->id] ?? '0';
+     }
+     if(!empty($cursortfld)) {
+        $ord = empty($cursortord)?' DESC':'';
+        return ($cursortfld . $ord);
+     }
+
+     return $this->browseorder;
   }
 
   function DrawBrowsePage($ajax=0) {
      global $ast_datarow, $ast_tips, $cursortfld, $cursortord,$as_cssclass,
      $ast_browse_jsdrawn, $astbtn, $ast_parm;
-     # $this->strt_time = microtime();
      if (astedit::$time_monitoring) WriteDebugInfo($this->id . ':render grid start, time: '.microtime());
 
      if($ajax) ob_start();
-     if(isset($ast_parm['ast_act']) && 'setfilter'==$ast_parm['ast_act'] && isset($_SESSION[$this->tbrowseid]['page']))
+     if(isset($ast_parm['ast_act']) && 'setfilter'==$ast_parm['ast_act'] && isset($_SESSION[$this->filterPrefix.$this->tbrowseid]['page']))
      {
         $this->ClearCurPageNo();
      }
-     $npage = isset($_SESSION[$this->tbrowseid]['page'])? $_SESSION[$this->tbrowseid]['page']:0;
+     $npage = $_SESSION[$this->filterPrefix.$this->tbrowseid]['page'] ?? 0;
      if($npage < 0)
      {
        $page = 0;
-       $_SESSION[$this->tbrowseid]['page'] = $npage;
+       $_SESSION[$this->filterPrefix.$this->tbrowseid]['page'] = $npage;
      }
-     $delconf = EvalValue($this->confirmdel);
-     $wdth = ($this->browsewidth <> '') ? " width='{$this->browsewidth}'" : '';
+     $delconf = astedit::evalValue($this->confirmdel);
+    //  $wdth = ($this->browsewidth) ? " style=\"width:{$this->browsewidth} !important\"" : '';
 
-     $scrolltag = ($this->browseheight=='')? '' : "style='overflow:auto; height:{$this->browseheight}'";
-     if(empty($ajax)) {
-       echo "<div $wdth id='astbrowse_{$this->tbrowseid}' align='{$this->_halign}' $scrolltag>";
-     }
-     if(empty($this->brenderfunc))
-       echo "<table id='astpage_{$this->tbrowseid}' $wdth class='astedit_browselayout'>\n".(($this->_drawbrheader)? $this->BrowseHeader() : '');
      $sqlqry = "SELECT * FROM $this->id";
      if(!empty($this->groupby) && !empty($this->sumfields))
      { # compose a SPECIAL sql
@@ -1969,19 +2170,16 @@ class CTableDefinition
 
      # add filter - WHERE ...
      $filt = $this->PrepareFilter();
-
      # all conditions placed into filter !
      if ($filt) $sqlqry .= " WHERE $filt";
      if(!empty($this->groupby) && !empty($this->sumfields))
        $sqlqry .= ' GROUP BY '.$this->groupby;
 
-     if(!empty($cursortfld)) {
-        $ord = empty($cursortord)?' DESC':'';
-        $this->browseorder = $cursortfld.$ord;
-     }
+
+     $browseorder = $this->prepareOrder();
      # add ORDER BY
-     if(!empty($this->browseorder))
-       $sqlqry .= ' ORDER BY '.$this->browseorder;
+     if(!empty($browseorder))
+       $sqlqry .= ' ORDER BY '.$browseorder;
 
      # add page output - LIMIT nPage, PageSize
      if($this->rpp && empty($this->groupby)){
@@ -1992,17 +2190,35 @@ class CTableDefinition
      {
 
        $fltid = 'flt_'.$this->tbrowseid;
+       if($this->filterPrefix) $fltid = $this->filterPrefix.'-'.$fltid;
        if(!empty($_SESSION[$fltid]))
          foreach($_SESSION[$fltid] as $flkey=>$flval) echo "filter[$flkey] = ($flval)<br>";
        echo "<div id='qry'>[debug] query: $sqlqry</div>\n";
      }
      $r_res = Astedit::$db->sql_query($sqlqry); # todo: limit ...
+     # writeDebugInfo("browse qry: ", $sqlqry);
      if(empty($r_res))
      {
-        echo "Error while executing query - <i>$sqlqry</i>:<br>". Astedit::$db->sql_error()
-          . "<br>Please call programmer to check template file !<br>\n";
-        return;
+         $sqlErr = Astedit::$db->sql_error();
+         $sqlErrno = Astedit::$db->sql_errno();
+         if($sqlErrno) {
+             $errText = Astedit::decodeSqlError($sqlErrno, $sqlErr, $this->id);
+             echo "<div class='msg_error' style='padding:1em 2em;margin:1em 2em'>$errText</div>";
+             $this->errorState = $sqlErrno;
+             /*
+             echo "Error [$sqlErrno] while executing query - <i>$sqlqry</i>:<br>". Astedit::$db->sql_error()
+              . "<br>Please call programmer to check template file !<br>\n";
+             */
+             return;
+         }
      }
+     $scrolltag = ($this->browseheight=='')? '' : "style='overflow:auto; height:{$this->browseheight}'";
+     if(empty($ajax)) {
+       echo "<div id='astbrowse_{$this->tbrowseid}' align='{$this->_halign}' class='table-responsive' $scrolltag>";
+     }
+     if(empty($this->brenderfunc))
+       echo "<table id='astpage_{$this->tbrowseid}' class='table table-bordered table-hover table-striped'>\n".(($this->_drawbrheader)? $this->BrowseHeader() : '');
+
      $nrow = 0;
      if($r_res) {
        while(($ast_datarow = Astedit::$db->fetch_assoc($r_res)))
@@ -2026,14 +2242,14 @@ class CTableDefinition
         $formname = $this->id;
         $mform = "<tr><form name=\"$formname\" id=\"$formname\" action=\"{$this->baseuri}\" method=POST>\n<input type=hidden name=ast_act value='doadd'>\n";
         $fcnt = 0;
-#        for($ii=0; $ii < count($this->fields); $ii++)
+
         foreach($this->fields as $fldid=>$fld)
         { #<4>
           $shfunc = $fld->showcond;
           $fldname = $fldid;
           if(!empty($shfunc))
           {
-             $shfunc = EvalValue($shfunc, 1);
+             $shfunc = astedit::evalValue($shfunc, 1);
           }
 
           if(!empty($shfunc) || ($fld->editcond==='H') ||
@@ -2057,21 +2273,34 @@ class CTableDefinition
         }
      } #<3>-safrm
 
-     if(($this->caninsert) && empty($this->safrm) && empty($this->brenderfunc) && empty($this->groupby))
-     {
-        $col = $this->_addcol-1;
-        echo "<tr><td colspan='$col'>&nbsp;
-         </td><td>" .
-         (defined('USE_JQUERY_UI') ? "<span class='ui-state-default ui-icon ui-icon-plus pnt' onclick=\"AstDoAction('add','0')\" title=\"{$ast_tips['tipadd']}\" />" :
-         "<input name=\"submit\" type=\"image\" border=0 src=\"{$astbtn['add']}\" onclick=\"AstDoAction('add','0')\"
-            title=\"{$ast_tips['tipadd']}\" {$this->imgatt} />")
-            ."</td></tr>\n";
+     if($this->caninsert && empty($this->brenderfunc) && empty($this->groupby))  {
+        if(empty($this->safrm)) {
+            # "add" is a button on bottom toolbar
+            $this->toolBar[] = '<span class="ms-auto"><input type="button" class="btn btn-primary" onclick="AstDoAction(\'add\',0)" value="' . $ast_tips['tipadd']. '" /></span>';
+        }
+        else {
+            $col = $this->_addcol-1;
+            echo "<tr><td colspan='$col'>&nbsp;
+             </td><td>" .
+             (defined('USE_JQUERY_UI') ? "<span class='ui-state-default ui-icon ui-icon-plus pnt' onclick=\"AstDoAction('add','0')\" title=\"$ast_tips[tipadd]\" />" :
+             "<input name=\"submit\" type=\"image\" src=\"$astbtn[add]\" onclick=\"AstDoAction('add','0')\"
+                title=\"{$ast_tips['tipadd']}\" {$this->imgatt} />")
+                ."</td></tr>\n";
+        }
      }
 
-     if(empty($this->brenderfunc)) echo "</TABLE>";
+     if(empty($this->brenderfunc)) echo "</TABLE></div>";
+
+     # draw bottom toolbar if any html code exists
+     if(count($this->toolBar)) {
+      echo "<div class='area-buttons bounded'>" . implode(' ',$this->toolBar) . '</div>';
+      # echo "<tr><td colspan=\"{$this->_addcol}\" ><div class='area-buttons'>" . implode(' ',$this->toolBar) . '</div></td></tr>';
+      }
+
+
 
      if(empty($ajax)) {
-       echo "</div>";
+      //  echo "</div>";
        if( empty($this->groupby)) $this->DrawPageLinks();
      }
      else {
@@ -2093,7 +2322,7 @@ class CTableDefinition
      else $ar = $fldid;
      # writeDebugInfo("filed ar: ", $ar);
      $id = $ar->id;
-     $econd = EvalValue($ar->editcond);
+     $econd = astedit::evalValue($ar->editcond);
 
      # если поле заводится только при создании, или { одно из PRIMARY-KEYS и операция-редактирование }
      if($econd==='C' || (in_array($id,$this->_pkfields) && $act==='edit')) {
@@ -2103,9 +2332,10 @@ class CTableDefinition
      $splt = explode('^', $ar->edittype);
      if(count($splt)<2) $splt = explode(',', $ar->edittype);
      $etype = empty($splt[0])? '' : strtoupper($splt[0]);
-     if(in_array($etype,array('SELECT','BLIST','BLISTEXT'))) {
-       $elist = empty($splt[1])? '' : $splt[1]; # values list for SELECT
-       $intags = empty($splt[2])? '' : $splt[2]; # add.tags for <INPUT ...> - onClick()
+     if(in_array($etype,array('SELECT','BLIST','BLISTEXT','BLISTLINK'))) {
+       $elist = $splt[1] ?? ''; # values list for SELECT
+       $intags = $splt[2] ?? ''; # add.tags for <INPUT ...> - onClick()
+       $lnkTitle = $splt[3] ?? '';
      }
      else {
        $intags = empty($splt[1])? '' : $splt[1];
@@ -2114,10 +2344,12 @@ class CTableDefinition
      $elen  = $ar->length;
      $disab = '';
      $def = $ar->GetDefaultValue();  # =isset($defar[0]) ? $defar[0] : '';
+
      $fltid = 'flt_'.$this->id;
+     if(!empty($this->filterPrefix)) $fltid = $this->filterPrefix . '-'. $fltid;
      $newval = $def; # isset($defar[1]) ? $defar[1] : $defar[0]; # formula or spec.word for "new" value
      #if(substr($newval,0,1) == '@' || substr($newval,0,1) == '#')
-     #  $newval = EvalValue($newval); else
+     #  $newval = astedit::evalValue($newval); else
      if(substr($def,0,1) === '+')
      { # авто-инкремент (+10 - на 10 от текущего максимума
         $incqry = "select max($id) $newval from $this->id";
@@ -2155,12 +2387,12 @@ class CTableDefinition
       || ($econd) === 'H')) {
        $edstyle = 'style="display:none;"'; # initially hidden row
      }
-     elseif($econd==='R') {# ReadOnly mode
+     elseif($econd==='R' && !$forsearch) {# ReadOnly mode
        $inputattrib .= ' readonly="readonly"';
      }
      else {
        # $shfunc = substr($econd,1);
-       $val = EvalValue($econd, $row);
+       $val = astedit::evalValue($econd, $row);
      }
      if(empty($val) && empty($forsearch)) return '';
 
@@ -2203,15 +2435,18 @@ class CTableDefinition
         $def = substr($def,1);
         if(substr($def,-1) == "'") $def = substr($def,0,-1);
      }
-     if($intags==='' && count($this->events)) {
-       if(isset($this->events[$ftype]) && is_array($this->events[$ftype]))
-         $t_ar = $this->events[$ftype];
-         if(!empty($t_ar)) foreach($t_ar as $ev_type=>$ev_func) {
-           $intags .= " $ev_type='$ev_func'";
-         }
-     }
-     $addon = $intags; # additional html code
      $etype = strtoupper($etype);
+     $addon = '';
+     if($etype !== 'BLISTLINK') {
+         if($intags==='' && count($this->events)) {
+           if(isset($this->events[$ftype]) && is_array($this->events[$ftype]))
+             $t_ar = $this->events[$ftype];
+             if(!empty($t_ar)) foreach($t_ar as $ev_type=>$ev_func) {
+               $intags .= " $ev_type='$ev_func'";
+             }
+         }
+         $addon = $intags; # additional html code
+     }
      $elen = empty($elen) ? 40 : $elen;
      $edlen = min(72, $elen);
      if ($forsearch) {
@@ -2260,7 +2495,7 @@ class CTableDefinition
            }
            if(substr($ftype,0,4) === 'DATE') {
              $addon = empty($addon)? "size='10' maxlength=$elen" : $addon;
-             $fldclasses['date']='datefield'; # ".datefield" - can attach calendar...
+             $fldclasses['date']='datefield form-control w80 d-inline'; # ".datefield" - can attach calendar...
              if (intval($def)<=0) $def = '';
              elseif (!$forsearch) $def = to_char($def);
            }
@@ -2282,6 +2517,13 @@ class CTableDefinition
            else $ret = "<input type=\"$etype\" id=\"$editid\" name=\"$editid\" $txtclass $addon value='$def' />";
            break;
 
+     case 'DATE':
+           if(!empty($ast_frmfunctions[AST_FORM_ELEMENT][$ftype])) {
+             $ret = call_user_func($ast_frmfunctions[AST_FORM_ELEMENT][$ftype],$id,$def);
+           }
+           else $ret = "<input type=\"date\" id=\"$editid\" name=\"$editid\" $txtclass $addon value='$def' />";
+           break;
+
      case 'DATETIME':
 
            $defymd = substr($def,0,10);
@@ -2294,7 +2536,7 @@ class CTableDefinition
              $ret = call_user_func($ast_frmfunctions[AST_FORM_ELEMENT]['DATE'],$id,substr($def,0,10));
            }
            else {
-               $ret = "<input type=\"text\" id=\"$editid\" name=\"$editid\" class=\"datefield\" style='width:80px;text-align:center' value='$defymd' />";
+               $ret = "<input type=\"text\" id=\"$editid\" name=\"$editid\" class=\"datefield d-inline w100 form-control text-center\" value='$defymd' />";
                $tmtitle = Astedit::localize('title_time','time');
                $ret .= "&nbsp; $tmtitle: <input type=\"text\" id=\"{$editid}_hh\" name=\"{$editid}_hh\" $txtclass style='width:20px;text-align:center' value='$defhh' maxlength='2'/>" .
                 " : <input type=\"text\" id=\"{$editid}_mm\" name=\"{$editid}_mm\" $txtclass style='width:20px;text-align:center' value='$defmm'  maxlength='2'/>";
@@ -2355,27 +2597,29 @@ EOJS;
 
      case 'BLIST':
      case 'BLISTEXT':
+     case 'BLISTLINK':
            $ret = '';
            # $def = empty($row[$id])? '':$row[$id];
            if(!empty($ar->edittype)) { #<4>
              if(!empty($elist)) {
+               $lar = GetArrayFromString($elist);
                if ($forsearch) {
                    $ret = "<select id='$editid' name='$editid' $addon>\n";
-                   $lar = GetArrayFromString($elist);
                    $ret .= DrawSelectOptions($lar,$def,true) . '</select>';
                    $vstring = '';
                }
                else {
-                   $lar = GetArrayFromString($elist);
                    if ($etype === 'BLIST')
-                           $ret = self::DrawBinaryList($id, $lar,$def);
+                       $ret = self::DrawBinaryList($id, $lar,$def);
                    elseif($etype === 'BLISTEXT')
-                           $ret = self::DrawBinaryListExt($id, $lar,$def);
+                       $ret = self::DrawBinaryListExt($id, $lar,$def);
+                   elseif($etype === 'BLISTLINK')
+                       $ret = self::DrawBinaryListLink($id, $lar,$def);
                }
              } #<5>
            } #<4>
            break;
-
+     /*
      case 'BLISTEXT':
            $ret = '';
            # $def = empty($row[$id])? '':$row[$id];
@@ -2394,6 +2638,7 @@ EOJS;
              } #<5>
            } #<4>
            break;
+     */
      case 'FILE':
        $ret = "<input type='file' name='$editid' id='{$ar->id}' {$txtclass} style='width:280px' />";
        break;
@@ -2412,7 +2657,7 @@ EOJS;
         $ret .= '&nbsp;'.$afterinput;
      }
      if ($ar->subtype === 'LOGIN' && !$forsearch) $ret .= " &nbsp;<span id='chk_{$this->id}_{$ar->id}'>&nbsp; </span>"; # here will be drawn check result
-     if($forsearch) $ret = (($forsearch==='from' OR $forsearch==='to')? '': ($ar->shortdesc . ' ')) .$ret;
+     if($forsearch) $ret = (($forsearch==='from' || $forsearch==='to')? '': ($ar->shortdesc . ' ')) .$ret;
      return $ret;
   }
   public function dropQuotes($strg) {
@@ -2433,13 +2678,16 @@ EOJS;
      global $ast_datarow,$as_cssclass,$ast_frmfunctions, $ast_wysiwyg_type;
 
      $ar = $this->fields[$fldid];
-
-     $ret = $this->drawInput($ar,false,$act,$row);
+     if(isset($this->fixFields[$fldid])) {
+        return "<input type='hidden' name='$fldid' value='" . $this->fixFields[$fldid] . "' />";
+     }
+     else
+        $ret = $this->drawInput($ar,false,$act,$row);
 
      if ($fullform === 'input') return $ret;
 
      $id = $ar->id; # имя (id) поля
-     $econd = EvalValue($ar->editcond);
+     $econd = astedit::evalValue($ar->editcond);
      if(in_array($id, $this->_pkfields)) $econd = 'H';
      $edstyle = ''; # I can 'hide' edit field in some cases, so they can be 're-enabled' from js
      if(empty($econd)) return '';# non-editable fields skipped !
@@ -2454,12 +2702,14 @@ EOJS;
          return ((empty($fullform)&& $ar->showcond)?'<td>&nbsp;</td>':'');
      }
      $editid = ($this->_prefixeditfield ? $this->id.'_': '') . $ar->id;
-     $relem = " class=\"even\" id=\"row_$editid\""; # <tr id=row_fieldname...>
+     $relem = " id=\"row_$editid\""; # <tr id=row_fieldname...>
+     if(!empty($ar->editRowClass)) $relem .= " class=\"$ar->editRowClass\"";
+
      # $addon .= (empty($addon)?'':' ').$inputattrib; # READONLY or whatelse if needed
-     $prompt = '<td style="text-align:right" nowrap>'.$ar->desc.'</td>'; # <td>title</td> if needed
+     $prompt = '<td class="text-end" >'.$ar->desc.'</td>'; # <td>title</td> if needed
      if($fullform) { # full screen form, so add all tags
        $ptompt = $ar->desc;
-       $ret = "<tr $relem $edstyle>$prompt<td width='95%'>$ret</td></tr>\n";
+       $ret = "<tr $relem $edstyle>$prompt<td>$ret</td></tr>\n";
      }
      return $ret;
   } # DrawFormelement() end
@@ -2476,7 +2726,7 @@ EOJS;
   function DrawBinaryList($flid, $lar,$def='') {
 
     $scrolltag = "";
-    $ret = "<div style=\"overflow:auto; max-height:{$this->blist_height}; width:{$this->blist_width}\" id=\"blist_$flid\"><table>";
+    $ret = "<div style=\"overflow:auto; max-height:{$this->blist_height}; width:{$this->blist_width}\" id=\"blist_$flid\"><table class='zebra'>";
     if (is_callable($lar)) {
         $lar = call_user_func($lar);
     }
@@ -2500,16 +2750,6 @@ EOJS;
         else $pid = $pname = $item;
 
         if (!is_numeric($kkk)) $pid = $kkk;
-/*        else $pid = (is_array($item))? array_shift($item) : $item;
-        if (is_array($item) && count($item)>0) {
-            $element = array_shift($item);
-            WriteDebugInfo("one element:". $element);
-            if (is_array($element)) {
-                $pname .= (isset($element[1]) ? $element[1] : $element[0]);
-            }
-            else $pname .= $element;
-        }
-*/
         $chk = in_array($pid, $spinit) ? 'checked="checked"' : '';
         if ($this->fullBlistForm)
             $ret .="<tr><td><label><input type='checkbox' name='_tmp_{$flid}_$pid' id='_tmp_{$flid}_$pid' value='$pid' $chk /> $pid-$pname</label></td></tr>\n";
@@ -2520,7 +2760,7 @@ EOJS;
     $ret .= "</table></div>\n";
     return $ret;
   }
-
+  # вывод BLISTEXT = BLIST с полями ввода текста
   function DrawBinaryListExt($flid, $lar,$def='') {
     $scrolltag = "";
     $blext_w = 30; #default width for additiona numeric field
@@ -2555,12 +2795,70 @@ EOJS;
     $ret .= "</table></div>\n";
     return $ret;
   }
-  /**
-  * @desc Draws full editing form to edit record
-  */
-  function DrawEditForm($pact='',$pid='',$backlink=true) {
+  # вывод BLISTLINK = BLIST со ссылкой (для вызова отдельного окна настроек)
+  function DrawBinaryListLink($flid, $lar,$def='',$func='',$lnkTitle='') {
+    $scrolltag = "";
+    static $rrr = 0;
+    # if(!$rrr)   writeDebugInfo("this: ", $this);
+    # writeDebugInfo("$flid: fields def ", $this->fields);
+    $editElems = explode(',', ($this->fields[$flid]->edittype ?? 'xxx'));
+    $rrr++;
+    $blext_w = 30; #default width for additiona numeric field
+    if(empty($func)) $func = $editElems[2] ?? "astedit.openSubForm('{id}')";
+    if(empty($lnkTitle)) $lnkTitle = $editElems[3] ?? 'Add Params';
 
+    $ret = "<div style=\"overflow:auto; max-height:{$this->blist_height}; width:{$this->blist_width}\" id=\"blist_$flid\"><table class='zebra'>";
+    if(is_array($lar) && count($lar)>0) { #<3>
+      $spinit = is_array($def)? $def: explode(',', $def);
+      $curvals = array();
+      foreach($spinit as $itm) {
+            $sp4 = explode(':',$itm);
+            $curvals[$sp4[0]] = isset($sp4[1])? $sp4[1] : '';
+      }
+      foreach($lar as $kkk => $item) { #<4>
+        if (is_array($item) && $item[0]==='<') { # optgoup - title before sub-list
+            $ret .="<tr><td><b>$item[1]</td></td></tr>\n";
+            continue;
+        }
+        if (is_array($item)) {
+            $pid = $item[0];
+            $pname = count($item)>1 ? "$pid - $item[1]" : $item;
+        }
+        elseif (is_scalar($item)) {
+            $pid = $pname = $item;
+        }
+        $chk = key_exists($pid, $curvals) ? 'checked="checked"' : '';
+        $sval = ($chk) ? $curvals[$pid] : '';
+
+        $oneFunc = str_replace('{id}',$pid, $func );
+
+        # writeDebugInfo("2) func:($pid) ", $oneFunc);
+        $hide = !empty($item['hide']); # if "hide" element passed? don't show link-button!
+        $btnHtml = $hide ? '' : "<td><input type='button' class='btn btn-primary' onclick=\"$oneFunc\" value='$lnkTitle'></td>";
+        $ret .= "<tr><td><label><input type='checkbox' name='_tmp_{$flid}_$pid' id='_tmp_{$flid}_$pid' value='$pid' $chk /> $pname</label></td>"
+             . $btnHtml . "</td></tr>\n";
+      } #<4>
+    } #<3>
+    $ret .= "</table></div>\n";
+    return $ret;
+  }
+  # remembers fixed Field values (if filter active etc.) Call before DrawEditForm() !
+  public static function setFixFields($arList) {
+      $this->fixFields = $arList;
+  }
+  /**
+  * Draws full editing form to edit record
+  * $fixFields - array with fixed field values to avoid change them
+  */
+  public function DrawEditForm($pact='',$pid='',$backlink=true, $returnBody = FALSE, $fixFields = []) {
     global $id, $ast_act, $ast_tips, $ast_datarow,$as_cssclass, $ast_wysiwyg_type;
+
+    if(is_array($fixFields) && count($fixFields)) $this->fixFields = $fixFields;
+    $strRet = '';
+    if(!empty($pid) && empty($id))
+        $id = $pid;
+    if(!empty($pact) && is_string($pact))
+        $ast_act = $pact;
     if(!empty($GLOBALS['ast_act'])) $ast_act = $GLOBALS['ast_act'];
     if(!empty($GLOBALS['ast_edit_id'])) $id = $GLOBALS['ast_edit_id'];
     if(!empty($this->beforeedit) && is_callable($this->beforeedit)) {
@@ -2573,9 +2871,12 @@ EOJS;
 
     $btnclass = empty($as_cssclass['button'])?'':"class='{$as_cssclass['button']}'";
 
-    $ast_datarow = array();
+    $ast_datarow = [];
+    # writeDebugInfo("ast_act: $ast_act, id: $id");
     if($ast_act == 'edit' && !empty($id)) {
-      $ast_datarow = Astedit::$db->GetQueryResult($this->id,'*',$this->__pkeqexpression($id),0,1);
+      # $ast_datarow = Astedit::$db->GetQueryResult($this->id,'*',$this->pkEqExpression($id),0,1); # old select style!
+      $ast_datarow = Astedit::$db->select($this->id,['where'=>$this->pkEqExpression($id), 'singlerow'=>1]);
+      # writeDebugInfo("data row: ", $ast_datarow );
     }
     $js = '';
     if($this->clonable) {
@@ -2632,21 +2933,23 @@ function astCheckUniqueness(tblid,obj,recid) {
 }
 EOJS;
 
-
-    echo "<script type='text/javascript'>$js</script>\n";
-    echo "<div id='editing_record' style='text-align:center'>";
-    if(!empty($titul)) echo "<h4>$titul</h4>\n";
-    if(($backlink) && empty($this->windowededit)) echo "<a href=\"{$this->baseuri}\" >{$ast_tips['tobrowse']}</a>\n";
-    if($this->clonable && !empty($id)) {
-#        echo "&nbsp; <button class='button' onclick=\"return Ast_ConfirmCloneRecord($id)\">{$ast_tips['clone_record']}</button>";
-      echo "&nbsp; <a href=\"#\" onclick=\"Ast_ConfirmCloneRecord('$id')\">{$ast_tips['clone_record']}</a>";
+    if(!empty($js)) $strRet .= "<script type='text/javascript'>$js</script>\n";
+    if(!$returnBody) {
+        $strRet .=  "<div id='editing_record' style='text-align:center'>";
+        if(!empty($titul)) $strRet .=  "<h4>$titul</h4>\n";
+        if(($backlink===TRUE) && empty($this->windowededit)) $strRet .= "<a href=\"{$this->baseuri}\" >{$ast_tips['tobrowse']}</a>\n";
+        if($this->clonable && !empty($id)) {
+          #   echo "&nbsp; <button class='btn btn-primary' onclick=\"return Ast_ConfirmCloneRecord($id)\">{$ast_tips['clone_record']}</button>";
+          $strRet .= "&nbsp; <a href=\"#\" onclick=\"Ast_ConfirmCloneRecord('$id')\">{$ast_tips['clone_record']}</a>";
+        }
     }
     $wdth = $this->editformwidth;
     $brnum = intval($wdth);
     if ("$brnum" === "$wdth") $wdth .= 'px';
-    echo "<div id='edit_layout' style=\"width:$wdth; margin: 0 auto;\">";
+    $strRet .= "<div id='edit_layout'>";
     if(!empty($this->editform) && is_callable($this->editform)) {
         # call user function for drawing EDIT form
+        if(!$returnBody) echo $strRet;
         call_user_func($this->editform, $ast_act,$ast_datarow, $this);
         return;
     }
@@ -2655,9 +2958,9 @@ EOJS;
 
       # openwysiwyg support:
     if(count($this->_wysiwyg)>0 && $ast_wysiwyg_type=='openwysiwyg') {
-        echo "<script type=\"text/javascript\">\n";
-        foreach($this->_wysiwyg as $wysid) { echo "WYSIWYG.attach('$wysid'); alert('$wysid');\n"; }
-        echo "</script>";
+        $strRet .= "<script type=\"text/javascript\">\n";
+        foreach($this->_wysiwyg as $wysid) { $strRet .= "WYSIWYG.attach('$wysid'); alert('$wysid');\n"; }
+        $strRet .= "</script>";
     }
     # simple built-in WYSIWYG editor
     if(count($this->_wysiwyg) && $ast_wysiwyg_type=='') { # there are 'WYSIWYG fields, so we need some onSubmit function:
@@ -2696,11 +2999,14 @@ function SaveAllWysiwygFields() {
       $frmtags = '';
       if($this->_multipart) $frmtags .= ' enctype="multipart/form-data"';
       if ($onsubmit) $frmtags .= " onsubmit='$onsubmit'";
+      if(!$returnBody)  $strRet .= "<form name=\"astedit_{$this->id}\" id=\"astedit_{$this->id}\" action=\"{$this->baseuri}\" method=\"post\"{$frmtags} >
+        <div class='card'><table class='table align-middle'>";
 
-      echo "<br><form name=\"astedit_{$this->id}\" id=\"astedit_{$this->id}\" action=\"{$this->baseuri}\" method=\"post\"{$frmtags} >
-        <div style='text-align:center;width:auto; padding-top:8px;'><table width='$this->editformwidth' class='astedit_formlayout'>
-        <input type=\"hidden\" id=\"ast_act\" name=\"ast_act\" value=\"do{$ast_act}\" />";
-      if(!empty($id)) echo "<input type=\"hidden\" id=\"_astkeyvalue_\" name=\"_astkeyvalue_\" value=\"$id\" />";
+      else $strRet .= "<form name=\"astedit_{$this->id}\" id=\"astedit_{$this->id}\" ><table class='table'>";
+
+      $strRet .= "<input type=\"hidden\" id=\"ast_act\" name=\"ast_act\" value=\"do{$ast_act}\" />";
+
+      if(!empty($id)) $strRet .= "<input type=\"hidden\" id=\"_astkeyvalue_\" name=\"_astkeyvalue_\" value=\"$id\" />";
       if (!empty($this->edit_template)) {
           $frmBody = file_get_contents($this->edit_template);
           $fsubst = [];
@@ -2710,44 +3016,60 @@ function SaveAllWysiwygFields() {
               # $this->DrawFormElement($fldid, $ast_act, $ast_datarow, 'input');
           }
           $frmBody = strtr($frmBody, $fsubst);
-          echo $frmBody;
+          $strRet .= $frmBody;
+          if(count($this->fixFields)) foreach($this->fixFields as $fixKey=>$fixVal) {
+            $strRet .= "<input type='hidden' name='$fixKey' value='$fixVal' />";
+          }
       }
       else foreach($this->fields as $fldid=>$fld) {
-        echo $this->DrawFormElement($fldid, $ast_act, $ast_datarow);
+        $strRet .= $this->DrawFormElement($fldid, $ast_act, $ast_datarow);
       }
 
       if(is_object($this->_picobj) && $ast_act == 'edit') {
-          echo '<tr class="even"><td colspan="2">';
+          $strRet .= '<tr><td colspan="2">';
           $this->_picobj->DrawPhotos($id,'800',true);
-          echo '</td></tr>';
+          $strRet .= '</td></tr>';
       }
       if(is_object($this->_picobj)) {
-          echo '<tr class="even"><td colspan="2">';
+          $strRet .= '<tr><td colspan="2">';
+          ob_start();
           $this->_picobj->DrawUploadPhotos(4);
-          echo "</td></tr>";
+          $strRet .= ob_get_clean();
+          $strRet .= "</td></tr>";
       }
 
       if(!empty($this->editsubform)) {
           if(is_callable($this->editsubform)) {
             $code = call_user_func_array($this->editsubform, array($ast_act,$id));
-            if (!empty($code) && is_string($code)) echo "<tr class=\"even\"><td colspan=\"2\">$code</td></tr>";
+            if (!empty($code) && is_string($code)) $strRet .= "<tr><td colspan=\"2\">$code</td></tr>";
           }
       }
       $canc = ($this->windowededit)? "<input type=\"submit\" onClick=\"window.close()\" $btnclass value=\"$canceltxt\" />":'';
       $helpBtn = '';
-      if ($this->helppage) {
+      if ($this->helppage && !$returnBody) {
         $helpBtn = "<a class=\"helplink\" href='javascript:void()' onclick=\"asteditShowHelp()\" title=\"$ast_tips[tiphelpedit]\">?</a>";
       }
-      echo "<tr><td colspan='2' class='bounded' style='text-align:center'><input type='submit' name='ast_submit_edit' {$btnclass} value='$submittxt' />&nbsp; $canc $helpBtn</td></tr>\n";
+      // echo "<tr><td colspan='2' class='area-buttons'><input type='submit' name='ast_submit_edit' {$btnclass} value='$submittxt' />&nbsp; $canc $helpBtn</td></tr>\n";
 
       if(!empty($this->aftereditsubform) && is_callable($this->aftereditsubform)) {
           $code = call_user_func_array($this->aftereditsubform, array($ast_act,$id));
           if (!empty($code) && is_string(code)) echo $code;
       }
-      echo "</table></div>\n";
-      echo "</form>\n";
-      echo "</div> <!-- editing_record -->\n";
-      if($this->windowededit) { echo "</body></html>"; exit; };
+      $strRet .= '</table>';
+      if($returnBody) {
+          $strRet .= '</form>';
+      }
+      else {
+          $strRet .= "<div class='card-footer justify-content-between'><span></span> <span><input type='submit' name='ast_submit_edit' {$btnclass} value='$submittxt' /> $canc</span> <span>$helpBtn</span></div>\n";
+          $strRet .= "</form>\n";
+          $strRet .= "</div> <!-- editing_record -->\n";
+      }
+      if($returnBody) return $strRet;
+
+      echo $strRet;
+      if($this->windowededit ) {
+          exit("</body></html>");
+      };
   }
 
   function SetEditButton($picurl,$width=0, $height=0) {
@@ -2795,7 +3117,10 @@ function SaveAllWysiwygFields() {
          # else WriteDebugInfo("undefined callback for afterdit: ", $this->afteredit);
       }
 
-      if(empty($params)) return ''; # something goes wrong, don't save !
+      if(!is_array($params) || !count($params)) {
+          $this->updateResult = 'error';
+          return 'Update failed: No passed Data!'; # something goes wrong, don't save !
+      }
 
       if(!empty($this->updatefunc) && is_callable($this->updatefunc)) {
           $res_text = call_user_func($this->updatefunc,$act,$params);
@@ -2816,8 +3141,9 @@ function SaveAllWysiwygFields() {
           foreach($this->_savefile_pm as $fldname => $svdata) {
               if(isset($_FILES[$fldname])) {
                   if(!empty($svdata[0]) && !empty($_FILES[$fldname]['name'])) {
-                      $fsplit = preg_split('/[\:\/\\\]+/',$_FILES[$fldname]['name']);
-                      $params[$svdata[0]] = substr($fsplit[count($fsplit)-1], -40);
+                      # $fsplit = preg_split('/[\:\/\\\]+/',$_FILES[$fldname]['name']);
+                      # $params[$svdata[0]] = substr($fsplit[count($fsplit)-1], -160);
+                      $params[$svdata[0]] = substr($_FILES[$fldname]['name'], -160);
                       # $params[$svdata[0]] = $_FILES[$fldname]['name']; # Save original file name "myfile.png"
                   }
                   if(!empty($svdata[1]) && !empty($_FILES[$fldname]['type']))
@@ -2837,7 +3163,7 @@ function SaveAllWysiwygFields() {
 
          if (strtoupper($fetype[0]) === 'CHECKBOX' && !isset($params[$fld->id])) $params[$fld->id] = '0';
 
-         $econd = ($this->_updt_all)? true : EvalValue($fld->editcond);
+         $econd = ($this->_updt_all)? true : astedit::evalValue($fld->editcond);
          $editfld = isset($params[$this->id .'_'. $fid])? ($this->id.'_'.$fid) : $fid;
          if($econd === 'A' and $act!=='doadd') continue;
 
@@ -2856,7 +3182,7 @@ function SaveAllWysiwygFields() {
                      if($auth->IsBuiltinAccount(strtolower($val))) return 'Выбранный логин запрещен !';
                  }
              }
-             $where = "($fid='$val')" . ( $act==='doedit' ? " AND NOT (".$this->__pkeqexpression($keyvalues).')':'');
+             $where = "($fid='$val')" . ( $act==='doedit' ? " AND NOT (".$this->pkEqExpression($keyvalues).')':'');
              $cnt = Astedit::$db->getQueryResult($this->id,'COUNT(1)',$where);
              if($cnt>0) return 'Выбранный логин уже был занят, выберите другой. Операция ввода отклонена ! !';
          }
@@ -2867,15 +3193,16 @@ function SaveAllWysiwygFields() {
            $newval = (isset($newarr[1])?$newarr[1] : '');
            if($newval==='now' || $newval==='{now}') { $val = date('Y-d-m H:i:s'); }
            elseif($newval==='today' || $newval==='{today}') $val = date('Y-d-m');
-           else $val = EvalValue($newval);
+           else $val = astedit::evalValue($newval);
            if(!empty($val)) $vlst[$fld->id] = $val;
          }
-         elseif(!empty($econd) && (isset($params[$fld->id]) || isset($params[$this->id.'_'.$fld->id]) || $fetype[0]==='BLIST' || $act==='doedit'))
+         elseif(!empty($econd) && (isset($params[$fld->id]) || isset($params[$this->id.'_'.$fld->id])
+           || in_array($fetype[0],['BLIST','LISTEXT']) || $act==='doedit'))
          { #<3>
            # $this->_prefixeditfield - returned fields may contain tablename_ prefix
            if($val=='' && IsNumberType($ftype,1)) $val = '0';
 
-           if($fetype[0]==='BLIST' || $fetype[0]==='BLISTEXT') { # <4> merge _tmp_$flid_$val into "n1,n2,..." text field
+           if(in_array($fetype[0], ['BLIST','BLISTEXT','BLISTLINK'])) { # <4> merge _tmp_$flid_$val into "n1,n2,..." text field
               # TODO: refactor to _tmp_field_blist[] (array input) !
               $vals = array();
               $blist_preflen = strlen("_tmp_{$fid}_");
@@ -2933,7 +3260,7 @@ function SaveAllWysiwygFields() {
       $result = -1;
       if(count($vlst)>0) { # <2> values OK, perform update/add action
           if ($act=='doedit') {
-            $result =  Astedit::$db->update($this->id, $vlst, $this->__pkeqexpression($keyvalues));
+            $result =  Astedit::$db->update($this->id, $vlst, $this->pkEqExpression($keyvalues));
           }
           else {
               $result = Astedit::$db->insert($this->id, $vlst);
@@ -2956,7 +3283,7 @@ function SaveAllWysiwygFields() {
           $keyvalues='';
           foreach($this->_pkfields as $tf) $keyvalues .=($keyvalues? AST_PKDELIMITER:'').$params[$tf];
         }
-        $res_text = Astedit::$VERBOSE ? $ast_tips['updated'] : (isset($GLOBALS['ast_text_added'])?$GLOBALS['ast_text_added']:'');
+        $res_text = Astedit::$VERBOSE ? $ast_tips['updated'] : (isset($GLOBALS['ast_text_added'])?$GLOBALS['ast_text_added']:'Data saved');
         if(is_object($this->_picobj)) { #delete old/insert new photos
           $this->_picobj->UpdatePictureInfo($keyvalues); # multi-pk-field - no work !
           # WriteDebugInfo("$this->id : some pictures may be uploaded for record $id");
@@ -2980,9 +3307,12 @@ function SaveAllWysiwygFields() {
             }
             @call_user_func($this->_auditing,$this->id,$act,$keyvalues, $delta);
         }
+        $this->updateResult = 'success';
       }
-      else
+      else {
         $res_text = "Error on executing operator:<br>$uqry<br>".Astedit::$db->sql_error();
+        $this->updateResult = 'error';
+      }
       return $res_text;
   }
   # finds fields changed during editing record
@@ -3014,7 +3344,13 @@ function SaveAllWysiwygFields() {
           }
           $destname = $this->file_folder . $fileprefix . '-'.str_pad($id, 8,'0',STR_PAD_LEFT) . '.dat';
           $result = @copy($finfo['tmp_name'], $destname);
-          if(!$result) WriteDebugInfo('Error writing file to ',$destname);
+          if(!$result) {
+              $fullfolder = realpath($this->file_folder);
+              # WriteDebugInfo('Error writing file to ',$destname, ' ', $fullfolder);
+              AppAlerts::raiseAlert("DOC FILES WRITE", 'Не удалось записать файл в папку документов - '.$fullfolder);
+              echo "<div class=\"alarm\">Не удалось записать файл в папку документов - $fullfolder</div>";
+          }
+          else AppAlerts::resetAlert("DOC FILES WRITE");
           @unlink($finfo['tmp_name']);
       }
       return $result;
@@ -3025,7 +3361,7 @@ function SaveAllWysiwygFields() {
       return (file_exists($flname) ? @unlink($flname) : 0);
   }
 
-  function SetFieldParameters($fld_id, $defvalue='',$showcond='',$editcond='') {
+  public function SetFieldParameters($fld_id, $defvalue='',$showcond='',$editcond='') {
     if(isset($this->fields[$fld_id])) {
       $this->fields[$fld_id]->defvalue = $defvalue;
       $this->fields[$fld_id]->showcond = $showcond;
@@ -3038,20 +3374,25 @@ function SaveAllWysiwygFields() {
   * sets table in "frozen" mode - protect from update operations (add, update,delete,clone)
   * @param mixed $parm true (default) - freezes table, false - return to editable mode
   */
-  function FreezeTable($parm=true) { $this->_frozen = $parm; }
-  function drawJsCode() {
+  public function FreezeTable($parm=true) { $this->_frozen = $parm; }
+  public function drawJsCode() {
       if($this->_jscode) echo "<script type=\"text/javascript\">\n"
         . str_ireplace('{baseuri}',$this->baseuri,$this->_jscode)
         . "\n</script>\n";
   }
-  function MainProcess($dobrowse=1, $canedit=false, $candelete=false, $caninsert=false)
+  # Setting prefix for filter field names in current context
+  public function setFilterPrefix($strPrefix) {
+    $this->filterPrefix = $strPrefix;
+  }
+  public function MainProcess($dobrowse=1, $canedit=false, $candelete=false, $caninsert=false)
   { # call this for handle all 'ast_act' values. Returns
-    global $ast_parm, $ast_act, $id, $ast_tips, $ast_browse_jsdrawn,$ast_datarow, $astbtn;
-     if (astedit::$time_monitoring) {
-         $this->strt_time = microtime();
-#         $elapsed = microtime() - $this->strt_time;
-         WriteDebugInfo($this->id . ':MainProcess start, mktime:' . $this->strt_time);
-     }
+    global $ast_parm, $ast_act, $id, $ast_tips, $ast_browse_jsdrawn,$ast_datarow,
+        $astbtn,$imgPath,$cursortfld,$cursortord;
+    if (astedit::$time_monitoring) {
+        $this->strt_time = microtime();
+        # $elapsed = microtime() - $this->strt_time;
+        WriteDebugInfo($this->id . ':MainProcess start, mktime:' . $this->strt_time);
+    }
 
     if(empty($ast_parm)) {
         $ast_parm = DecodePostData(1);
@@ -3064,16 +3405,17 @@ function SaveAllWysiwygFields() {
       $fl = empty($ast_parm['ast_f'])?'':$ast_parm['ast_f'];
       if(!empty($fl) && !empty($tb)) {
           $cursortfld = $fl;
-          $cursortord = (!empty($_SESSION['ast_sortfld_'.$tb]) && $_SESSION['ast_sortfld_'.$tb]===$fl && isset($_SESSION['ast_sortord_'.$tb] ))?
-              $_SESSION['ast_sortord_'.$tb]  : 0;
+          $cursortord = (!empty($_SESSION[$this->filterPrefix.'ast_sortfld_'.$tb]) && $_SESSION[$this->filterPrefix.'ast_sortfld_'.$tb]===$fl
+            && isset($_SESSION[$this->filterPrefix.'ast_sortord_'.$tb] ))?
+              $_SESSION[$this->filterPrefix.'ast_sortord_'.$tb]  : 0;
           $cursortord = $cursortord? 0:1; # flip
-          $_SESSION['ast_sortfld_'.$tb] = $fl;
-          $_SESSION['ast_sortord_'.$tb] = $cursortord;
-
+          $_SESSION[$this->filterPrefix.'ast_sortfld_'.$tb] = $fl;
+          $_SESSION[$this->filterPrefix.'ast_sortord_'.$tb] = $cursortord;
       }
     }
-
-    $this->imgatt = isset($astbtn['class']) ? "class=\"$astbtn[class]\"" : "width='{$astbtn['w']}' height='{$astbtn['h']}'";
+    $btWidth = $astbtn['w'] ?? 16;
+    $btnHeight = $astbtn['h'] ?? 16;
+    $this->imgatt = isset($astbtn['class']) ? "class=\"$astbtn[class]\"" : "width='$btWidth' height='$btnHeight'";
 
     if(empty($this->id)) { echo 'No meta-data loaded'; return; }
     if(empty($ast_act) && !empty($ast_parm['ast_act'])) $ast_act=$ast_parm['ast_act'];
@@ -3083,10 +3425,10 @@ function SaveAllWysiwygFields() {
     }
 
     $this->canedit=$canedit;  $this->candelete=$candelete; $this->caninsert=$caninsert;
-    $page = empty($_SESSION[$this->tbrowseid]['page']) ? 0 : $_SESSION[$this->tbrowseid]['page'];
+    $page = $_SESSION[$this->filterPrefix.$this->tbrowseid]['page'] ?? 0;
     $lnkrow = floor($page/$this->pagelinksinrow); # current visible row in page-hrefs
     if(empty($ast_act)) $ast_act = empty($ast_parm['ast_act']) ? '' : $ast_parm['ast_act'];
-#    if(empty($ast_act) && !empty($_GET['ast_act'])) $ast_act = $_GET['ast_act'];
+
     if(empty($id))  $id  = empty($ast_parm['id'])? '' : $ast_parm['id'];
     # if came from "endless" mode, added record, get in "EDIT" mode for this record
     if(!empty($GLOBALS['ast_endless_act'])) $ast_act = $GLOBALS['ast_endless_act'];
@@ -3098,7 +3440,7 @@ function SaveAllWysiwygFields() {
       $id = $ast_parm['_astkeyvalue_'];  # <TODO>!!!
 
     if(isset($ast_parm['astpage']))
-        $_SESSION[$this->tbrowseid]['page'] = $ast_parm['astpage'];
+        $_SESSION[$this->filterPrefix.$this->tbrowseid]['page'] = $ast_parm['astpage'];
 
 
     switch($ast_act)
@@ -3184,6 +3526,7 @@ function SaveAllWysiwygFields() {
 
     case 'setfilter': # user sets some search criteria - so set a filter
       $tid = 'flt_'.$this->tbrowseid; # table name, must exist in passed attributes
+      if(!empty($this->filterPrefix)) $tid = $this->filterPrefix . '-' . $tid;
       $this->ClearCurPageNo();
       if(!empty($ast_parm['search_function'])) {
         $searchfnc = $ast_parm['search_function'];
@@ -3195,7 +3538,9 @@ function SaveAllWysiwygFields() {
           $val = isset($ast_parm['flt_value']) ? $ast_parm['flt_value'] : '';
           $valfrom = isset($ast_parm['flt_value_from']) ? $ast_parm['flt_value_from'] : null;
           $valto = isset($ast_parm['flt_value_to']) ? $ast_parm['flt_value_to'] : null;
-          if(!empty($ast_parm['clearfilter'])) unset($_SESSION[$tid][$fname]);
+          if(!empty($ast_parm['clearfilter'])) {
+              unset($_SESSION[$tid][$fname]);
+          }
           else {
             if($this->fields[$fname]->edittype == 'CHECKBOX' or $this->fields[$fname]->type=='BOOL') $val = empty($val) ? 0:1;
             if($valfrom!==null OR $valto!==null) {
@@ -3206,6 +3551,7 @@ function SaveAllWysiwygFields() {
 
       }
       break;
+
     case 'resetfilter':
       $this->ClearCurPageNo();
       if(!empty($ast_parm['search_function'])) {
@@ -3214,6 +3560,7 @@ function SaveAllWysiwygFields() {
       }
       else {
         $tid = 'flt_'.$this->tbrowseid; # table name, must exist in passed attributes
+        if(!empty($this->filterPrefix)) $tid = $this->filterPrefix . '-' . $tid;
         $fname = $ast_parm['flt_name']; # field name to reset filter
         if(isset($_SESSION[$tid][$fname])) unset($_SESSION[$tid][$fname]);
       }
@@ -3270,16 +3617,18 @@ function SaveAllWysiwygFields() {
     if($showbrowse) { #<2>
       if(empty($ast_browse_jsdrawn)) {
         $ast_browse_jsdrawn = true;
-        $cdel = EvalValue($this->confirmdel);
+        $cdel = astedit::evalValue($this->confirmdel);
         $defprompt = $ast_tips['deleteprompt'];
         $deltxt = empty($cdel) ? '': $defprompt.($cdel=='1'?'':"\\n$cdel");
         if (defined('USE_JQUERY_UI')) {
             $jsSearchHide = $jsSearchShow = '$("#img_srchhide").toggleClass("ui-icon-triangle-1-s ui-icon-triangle-1-n");';
         }
         else {
+            if(!isset($imgPath)) $imgPath = 'img/';
             $jsSearchShow = "\$('#img_srchhide').attr('src','{$imgPath}minus.gif');";
             $jsSearchHide = "\$('#img_srchhide').attr('src','{$imgPath}plus.gif');";
         }
+        $hidesearch = empty($_COOKIE['ast_hidesearch'])? 0 : 1;
 ?>
 <div style="display:none"><form name="astfm" id="astfm" method="post" action="<?=$this->baseuri?>" >
 <input type="hidden" id="ast_act" name="ast_act" />
@@ -3292,18 +3641,16 @@ var lnkrow = [];
 astMainId = 0;
 var ast_fm = (jQuery)? $("#astfm").get(0) : document.getElementById("astfm");
 var ast_delprompt = "<?=$deltxt?>";
-var ast_hidesearch= <?=empty($_COOKIE['ast_hidesearch'])?0:1 ?>;
+var ast_hidesearch= <?=$hidesearch?>;
 function ToggleSearchBar() {
   if(ast_hidesearch) {
     ast_hidesearch=0;
     if($.cookie) $.cookie("ast_hidesearch",0); else setCookie("ast_hidesearch",0);
-    $('#tr_astsearchbar').show();
     <?=$jsSearchShow?>
   }
   else {
     ast_hidesearch=1;
     if($.cookie) $.cookie("ast_hidesearch",1, { expires: 120}); else setCookie("ast_hidesearch",1,120);
-    $('#tr_astsearchbar').hide();
     <?=$jsSearchHide?>
   }
 }
@@ -3382,7 +3729,7 @@ function selRow<?=$this->tbrowseid?>(obj) {
    if($this->ajaxmode) $this->PrintAjaxFunctions(); # ex. global Astedit_PrintAjaxFunctions
    $this->DrawSearchBar(); # search bar - filter & search forms
 
-   if(!empty($res_text)) {
+   if(!empty($res_text) && $this->updateResult === 'error') {
        Astedit::showError($res_text);
        # echo "<br>$res_text<br>";
    }
@@ -3413,7 +3760,10 @@ function selRow<?=$this->tbrowseid?>(obj) {
            foreach($reseter as $fldname) {
                if($fltname == $fldname) { $sbros = true; continue; }
                if($sbros) {
-                   unset($_SESSION['flt_'.$this->tbrowseid][$fldname]);
+                   $tid = 'flt_'.$this->tbrowseid;
+                   if(!empty($this->filterPrefix)) $tid = $this->filterPrefix . '-' . $tid;
+
+                   unset($_SESSION[$tid][$fldname]);
                }
            }
         }
@@ -3457,28 +3807,29 @@ function selRow<?=$this->tbrowseid?>(obj) {
     if(count($this->childtables)>0) { #<4>
 
       $del_sql = array(); # fill with "DELETE FROM <child_table> ..." operators for each child table
-      $thisrec = Astedit::$db->select($this->id,['where' =>$this->__pkeqexpression($id),'singlerow'=>1]);
+      $thisrec = Astedit::$db->select($this->id,['where' =>$this->pkEqExpression($id),'singlerow'=>1]);
       if ( is_array($thisrec) ) { #<5>
         foreach($this->childtables as $onet){ #<6>
-          $whcond = '(1)';
+          $whcond = [];
           $fi1 = preg_split('/[; ,]/',$onet['field']);
           $fi2 = preg_split('/[; ,]/',$onet['childfield']);
           for($kkk=0;$kkk<min(count($fi1),count($fi2));$kkk++) {
-            if(isset($thisrec[$fi1[$kkk]])) {
-              $whcond .= ' AND ' .$fi2[$kkk] . "='". $thisrec[$fi1[$kkk]] ."'";
+            if(!empty($thisrec[$fi1[$kkk]])) {
+                $whcond[$fi2[$kkk] ] = $thisrec[$fi1[$kkk]];
             }
           }
 
-          if(!empty($onet['condition'])) $whcond .= " AND {$onet['condition']}";
+          if(!empty($onet['condition'])) $whcond[] = $onet['condition'];
           # TODO - handle grand-children record deletion ???
-#          $parval = isset($askresult[$parentfld]) ? $askresult[$parentfld] : '';
+          # $parval = isset($askresult[$parentfld]) ? $askresult[$parentfld] : '';
           if(!empty($onet['protect'])) {
               $cnt = Astedit::$db->GetQueryResult($onet['table'],'COUNT(1)',$whcond);
+              # writeDebugInfo("protect SQL: [$cnt] ", Astedit::$db->getLastQuery());
               if($cnt>0) {
                   $del_warning[] = intval($onet['protect']) ? (self::localize('err_record_cant_be_deleted') . $onet['table']):$onet['protect'];
               }
           }
-          else $del_sql[] = "DELETE FROM {$onet['table']} WHERE $whcond";
+          else $del_sql[] = ['table' => $onet['table'], 'cond' => $whcond ];
         }
 
         if(count($del_warning)) {
@@ -3487,7 +3838,10 @@ function selRow<?=$this->tbrowseid?>(obj) {
             else return $del_warning;
         }
         if(count($del_sql))
-           foreach($del_sql as $delqry) { Astedit::$db->sql_query($delqry); } # drop records from ALL child tables done.
+           foreach($del_sql as $item) {
+               $deleted = Astedit::$db->delete($item['table'], $item['cond']);
+               # writeDebugInfo("deleted $deleted records in child $item[table] by SQL: ", Astedit::$db->getLastQuery());
+           } # drop records from ALL child tables done.
       } #<5>
     } #<4>
     if(is_object($this->_picobj)) $this->_picobj->DropFiles($id); # delete image files and records from
@@ -3501,9 +3855,9 @@ function selRow<?=$this->tbrowseid?>(obj) {
         }
     }
 
-    # $where = $this->__pkeqexpression($id);  $sqry = "DELETE FROM {$this->id} WHERE $where";
-    $whereExp = $this->__pkeqexpression($id);
-    if (count($whereExp)) {
+    # $where = $this->pkEqExpression($id);  $sqry = "DELETE FROM {$this->id} WHERE $where";
+    $whereExp = $this->pkEqExpression($id);
+    if (!empty($whereExp) || (is_array($whereExp) && count($whereExp)>0)) {
         Astedit::$db->delete($this->id, $whereExp);
         if(Astedit::$db->sql_errno()) $ret = $ast_tips['rec_delerror'];
         else $ret = '1';
@@ -3534,7 +3888,7 @@ function selRow<?=$this->tbrowseid?>(obj) {
   if(empty($this->pagelinks)) return;
   $flt = $this->PrepareFilter();
 
-  $page = empty($_SESSION[$this->tbrowseid]['page']) ? 0 : $_SESSION[$this->tbrowseid]['page'];
+  $page = $_SESSION[$this->filterPrefix.$this->tbrowseid]['page'] ?? 0;
   $lnkrow = floor($page/$this->pagelinksinrow); // current visible row in page-hrefs
   $nrows=Astedit::$db->select($this->id, array('fields'=>'count(1) cnt','where'=>$flt,'singlerow'=>1));
 
@@ -3552,19 +3906,19 @@ function selRow<?=$this->tbrowseid?>(obj) {
   if(($page >= $pages) && ($page > 0))
   { // if somehow pages count becomes low, correct cur.page number !
     $page = max(0,$pages-1);
-    $_SESSION[$this->tbrowseid]['page'] = $page;
+    $_SESSION[$this->filterPrefix.$this->tbrowseid]['page'] = $page;
   }
   $retcode = '';
   if($pages<=1) return $pages;
   $lnkpages = floor($pages/$this->pagelinksinrow)+1;
-  $whoref = $this->baseuri.'&astpage';
-  $retcode.="<script language='javascript'>astedit_curpageNo['{$this->tbrowseid}'] = $page; </script>\n";
-  $retcode.="<div align='center'><table border=0 cellspacing=1 cellpadding=0><tr><td>";
-  if($this->pagelinks>1 && $lnkpages>1) $retcode.="<td class='{$as_cssclass['pagelnk']}'><a id='{$this->tbrowseid}1' href='javascript://' onClick='AsteditSetPage(\"{$this->tbrowseid}\",-1,$lnkpages)'>&lt;&lt;</td>";
-  $stepleft = $page-1;
-  $stepright = $page+1;
-  $icol = 0; $i=1;
-  $lnrow = 0;
+  // $whoref = $this->baseuri.'&astpage';
+  $retcode.="<script type='text/javascript'>astedit_curpageNo['{$this->tbrowseid}'] = $page; </script>\n";
+  $retcode.="<div align='center' class='mt-2'><table><tr><td>";
+  if($this->pagelinks>1 && $lnkpages>1) $retcode.="<td class='custom-page-link {$as_cssclass['pagelnk']}'><a id='{$this->tbrowseid}1' href='javascript://' onClick='AsteditSetPage(\"{$this->tbrowseid}\",-1,$lnkpages)'>&lt;&lt;</td>";
+  // $stepleft = $page-1;
+  // $stepright = $page+1;
+  // $icol = 0; $i=1;
+  // $lnrow = 0;
   if($this->pagelinks>1) { //<3>
    for($lrow=0; $lrow<$lnkpages; $lrow++) { #<4>//while($i<=$pages) {
     $style = $lnkrow==$lrow ? '': "style='display:none'";
@@ -3575,8 +3929,8 @@ function selRow<?=$this->tbrowseid?>(obj) {
       if($pgno>=$pages) break; //echo "<td class='{$as_cssclass['pagelnk']}'> &nbsp; </td>";
       $cls = ($pgno==$page)? $as_cssclass['pagelnka']: $as_cssclass['pagelnk'];
       $jspgref = ($this->ajaxmode)? "AsteditSetCurPage(\"{$this->tbrowseid}\",$pgno)": "window.location=\"{$this->baseuri}astpage=$pgno\"";
-      $pghref = "href='javascript://' onClick='$jspgref'";
-      $retcode.="<td class='$cls' id='astlnkpg_{$this->tbrowseid}_{$pgno}' onClick='$jspgref' > $pgno1 </td>";
+      // $pghref = "href='javascript://' onClick='$jspgref'";
+      $retcode.="<td class='custom-page-link $cls' id='astlnkpg_{$this->tbrowseid}_{$pgno}' onClick='$jspgref' > $pgno1 </td>";
     }
     $retcode.="</tr></table></td>\n";
    } #<4>
@@ -3590,9 +3944,9 @@ function selRow<?=$this->tbrowseid?>(obj) {
       $pgno1=$pgno+1;
       $cls = ($pgno==$page)? $as_cssclass['pagelnka']: $as_cssclass['pagelnk'];
       $jspgref = ($this->ajaxmode)? "AsteditSetCurPage(\"{$this->tbrowseid}\",$pgno)": "window.location=\"{$this->baseuri}astpage=$pgno\"";
-      $pghref = "href='javascript://' onClick='$jspgref'";
+      // $pghref = "href='javascript://' onClick='$jspgref'";
       if($kk>0 && $lnlist[$kk-1]+1 != $pgno) $retcode.="<td> &nbsp; ... &nbsp; </td>";
-      $retcode.="<td class='$cls' id='astlnkpg_{$this->tbrowseid}_{$pgno}' onClick='$jspgref' style='cursor:hand'> $pgno1 </td>";
+      $retcode.="<td class='custom-page-link $cls' id='astlnkpg_{$this->tbrowseid}_{$pgno}' onClick='$jspgref' style='cursor:hand'> $pgno1 </td>";
     }
   }else {
     $retcode.="<td class='{$as_cssclass['pagelnka']}'> $page </td>";
@@ -3632,7 +3986,7 @@ function selRow<?=$this->tbrowseid?>(obj) {
     $nevals = isset($ast_parm['newvals']) ? $ast_parm['newvals'] : '';
     $cloneChild = !empty($ast_parm['clonechild']);
 
-    $dta = Astedit::$db->GetQueryResult($this->id,'*',$this->__pkeqexpression($record_id),false, true);
+    $dta = Astedit::$db->GetQueryResult($this->id,'*',$this->pkEqExpression($record_id),false, true);
     if(Astedit::$db->affected_rows()<1) return 0;
 
     foreach($this->_pkfields as $pkf) {
@@ -3692,8 +4046,9 @@ function selRow<?=$this->tbrowseid?>(obj) {
   * @desc convert all definition strings to desired charset
   */
   function ConvertCharSet($csetto) {
-    mb_convert_variables($csetto,$this->charset,$this);
-    $this->charset = $csetto;
+      # writeDebugInfo("ConvertCharSet from [$this->charset] to [$csetto]");
+      mb_convert_variables($csetto,$this->charset,$this);
+      $this->charset = $csetto;
   }
   function AllPkFields() {
     $ret = '';
@@ -3750,29 +4105,21 @@ EOJS;
        echo $ret;
     }
 
+    # Append some buttons or whatelse HTML code to toolbar below the grid
+    public function appendToolbarCode($htmlCode) {
+        $this->toolBar[] = $htmlCode;
+    }
 #   function SetAjaxedInit($bvalue=true) { $this->_ajaxedinit = $bvalue; }
 } # CTableDefinition class definition end
-function BrShortText($txt, $maxlen=40) {
-   if(empty($txt)) return '';
-   $txt = strip_tags($txt);
-   $cset = defined('MAINCHARSET')? constant('MAINCHARSET') : '';
 
-   $cr = strpos($txt, "\r");
-   if($cr >0 && $cr<4 && $cr<$maxlen) $cr =strpos($txt, "\r", $cr+2);
-   if($cr>0)
-    $cutoff = min($cr, $maxlen);
-   else $cutoff = $maxlen;
-   if (substr($cset,0,3) === 'UTF') {
-       $ret = ($cutoff < mb_strlen($txt, $cset)) ? mb_substr($txt,0,$cutoff,$cset) . '...' : $txt;
-       return $ret;
-   }
-   return ($cutoff < strlen($txt))? substr($txt,0,$cutoff).'...' : $txt;
+function BrShortText($txt, $maxlen=40) {
+    return Astedit::BrShortText($txt, $maxlen);
 }
 
 
 function IsTextType($ftype) {
   $flow = strtolower($ftype);
-  return in_array($flow,array('text','tinytext','mediumtext','longtext','char','varchar','blist','blistext'));
+  return in_array($flow,array('text','tinytext','mediumtext','longtext','char','varchar','blist','blistext','blistlink'));
 }
 
 function IsIntType($ftype) {
@@ -3784,54 +4131,6 @@ function IsNumberType($ftype, $withint=true) {
   if(($withint) && IsIntType($ftype)) return true;
   $flow = strtolower($ftype);
   return in_array($flow,array('real','float','double','decimal','dec','numeric'));
-}
-
-function EvalValue($param, $par_arr=null) {
-  if(empty($param)) return false;
-   $ret = false;
-   if('@' === substr($param,0,1)) { #<3>
-      $fnc =substr($param,1);
-      # writeDebugInfo("func:", $fnc);
-      if(is_callable($fnc)){
-          $ret = call_user_func($fnc, $par_arr);
-      }
-      else {
-          $splt = explode('::', $fnc);
-          if (count($splt)>1 && class_exists($splt[0])) {
-              $clsName = $splt[0]; $obj = $splt[1];
-              WriteDebugInfo(" try to get prop: $clsName :: $obj");
-              $evaluated = $clsName::$obj;
-              return $evaluated;
-          }
-      }
-   } #<3>
-   elseif('#' === substr($param,0,1) && stripos($param,'{ID}')!==false) {
-      $fnc = substr($param,1);
-      $fnc = str_ireplace('{ID}', $par_arr, $fnc);
-      $ret = eval($fnc); # "{ID} > 1" returns eval(param>1)
-   }
-   elseif('~' === substr($param,0,1)) { #~SELECT ... operator, return result as array
-      $qry = substr($fnc,1);
-      $qry = str_ireplace('{ID}', $par_arr, $fnc);
-      $lnk = Astedit::$db->sql_query($qry);
-      $ret = array();
-      while(is_resource($lnk) && ($r=Astedit::$db->fetch_row($lnk))) $ret[] = $r;
-   }
-   elseif('!' === substr($param,0,1)) { #<3> read option list from file
-     $Lname = substr($param,1);
-     $ret = array();
-     if(is_readable($Lname) && ($ffh=fopen($Lname,'r'))>0) { #<4>
-       while(!feof($ffh)) {
-         $strk = trim(fgets($ffh,4096));
-         if($strk[0]!='#') $ret[] = explode('|', $strk);
-       }
-       fclose($ffh);
-     } #<4>
-   } #<3>
-   else {
-      $ret = $param;
-   }
-   return $ret;
 }
 
 function DrawWysiwigToolbar($obj) {
@@ -3890,7 +4189,7 @@ function AsteditAjaxCalls() {
      case 'setpage':
       $tpage = isset($ast_parm['astpage'])?$ast_parm['astpage']:0;
       if(function_exists('astedit_adjustview')) astedit_adjustview($ajxtbl); # adjust showing rules
-      $_SESSION[$ajxtbl->tbrowseid]['page'] = $tpage;
+      $_SESSION[$ajxtbl->filterPrefix.$ajxtbl->tbrowseid]['page'] = $tpage;
       $ret = $ajxtbl->DrawBrowsePage(1);
       break;
       # STOP HERE!
@@ -3904,7 +4203,7 @@ function AsteditAjaxCalls() {
         }
       }
       else {
-        $vals = Astedit::$db->GetQueryResult($tblname,'*',$ajxtbl->__pkeqexpression($recid),0,true);
+        $vals = Astedit::$db->GetQueryResult($tblname,'*',$ajxtbl->pkEqExpression($recid),0,true);
       }
       $ret = '1';
       if(is_array($vals)) foreach($vals as $vkey=>$vvalue) {
@@ -3916,7 +4215,7 @@ function AsteditAjaxCalls() {
 
           list($edttype) = explode(',', $ajxtbl->fields[$vkey]->edittype);
 
-          if ($edttype === 'BLIST') { # make BLIST checkboxes checked
+          if (in_array($edttype, ['BLIST','BLISTLINK'])) { # make BLIST checkboxes checked
 
               if ($vvalue!=='') {
                   $splt = explode(',', $vvalue);
