@@ -3,8 +3,8 @@
 * @package astedit , Database tables create/upgrade/browse/edit engine  (CRUD++)
 * @name astedit(x).php - main module, classes CFieldDefinition,CIndexDefinition,CTableDefinition
 * @author Alexander Selifonov, < alex [at] selifan dot ru >
-* @Version 1.86.003
-* updated 2025-07-18
+* @Version 1.87.002
+* updated 2025-10-17
 **/
 # error_reporting (E_ALL ^ E_NOTICE);
 # User field types, added by including your own classes
@@ -43,7 +43,7 @@ class Astedit {
         else {
             global $as_dbengine;
             if (!is_object(self::$db)) {
-                if(class_exists('AppEnv') && isset(AppEnv::$db)) self::$db =& appEnv::$db;
+                if(class_exists('AppEnv') && isset(AppEnv::$db)) self::$db =& AppEnv::$db;
                 elseif(is_object($as_dbengine)) self::$db =& $as_dbengine;
                 elseif (class_exists('CDbEngine')) self::$db = CDbEngine::getInstance();
             }
@@ -57,8 +57,8 @@ class Astedit {
     }
     public static function showError($text) {
       /*
-      if (is_callable('appEnv::addInstantMessage'))
-        appEnv::addInstantMessage($text,'astedit_update');
+      if (is_callable('AppEnv::addInstantMessage'))
+        AppEnv::addInstantMessage($text,'astedit_update');
         else
       */
       echo "<div class=\"alarm w-600\">$text</div>";
@@ -338,7 +338,7 @@ class Astedit {
         $sRet = '';
         if(isset(AsteditLocalization::$strings['sql_error_'.$errno]))
             $sRet = AsteditLocalization::$strings['sql_error_'.$errno];
-        elseif(is_callable('AppEnv::getLocalised')) $sRet = Appenv::getLocalized('sql_error_'.$errno);
+        elseif(is_callable('AppEnv::getLocalised')) $sRet = AppEnv::getLocalized('sql_error_'.$errno);
         if(empty($sRet)) $sRet = $errText;
         if(!empty($tableiId)) $sRet = str_replace('{tablename}', $tableiId, $sRet);
         return $sRet;
@@ -1249,13 +1249,13 @@ class CTableDefinition
         } #<4> switch
      } #<3>
      if ($this->datacharset=='') $this->datacharset = $this->charset;
-     # localization block with appEnv, if defined
-/*     if(class_exists('appenv')) {
-         if($locr=appEnv::getLocalized($this->id.'.'.'descr') && $locr!==$this->id.'.'.'descr') $this->desc =  $locr;
-         if($locr=appEnv::getLocalized($this->id.'.'.'sdescr' && $locr!==$this->id.'.'.'sdescr')) $this->shortdesc =  $locr;
+     # localization block with AppEnv, if defined
+/*     if(class_exists('AppEnv')) {
+         if($locr=AppEnv::getLocalized($this->id.'.'.'descr') && $locr!==$this->id.'.'.'descr') $this->desc =  $locr;
+         if($locr=AppEnv::getLocalized($this->id.'.'.'sdescr' && $locr!==$this->id.'.'.'sdescr')) $this->shortdesc =  $locr;
          foreach($this->fields as $fid=>$fld) {
-            if ($locr=appEnv::getLocalized('t.'.$this->id.'.'.$fld->id) && $lock !=='t.'.$this->id.'.'.$fld->id) $this->fields[$fid]->desc =  $locr;
-            if ($locr=appEnv::getLocalized('ts.'.$this->id.'.'.$fld->id) && 'ts.'.$this->id.'.'.$fld->id) $this->fields[$fid]->shortdesc =  $locr;
+            if ($locr=AppEnv::getLocalized('t.'.$this->id.'.'.$fld->id) && $lock !=='t.'.$this->id.'.'.$fld->id) $this->fields[$fid]->desc =  $locr;
+            if ($locr=AppEnv::getLocalized('ts.'.$this->id.'.'.$fld->id) && 'ts.'.$this->id.'.'.$fld->id) $this->fields[$fid]->shortdesc =  $locr;
             if (empty($this->fields[$fid]->shortdesc)) $this->fields[$fid]->shortdesc = $this->fields[$fid]->desc;
          }
      }
@@ -1268,7 +1268,7 @@ class CTableDefinition
      $formFile = dirname($this->_tplfile). "/" . $this->id . ".form.htm";
      if (is_file($formFile) && empty($this->edit_template)) $this->edit_template = $formFile;
      # Add "externally added dependensies"
-     if (class_exists('appEnv') && is_callable('appEnv::getTableDependencies') && $deps = appEnv::getTableDependencies($this->id))
+     if (class_exists('AppEnv') && is_callable('AppEnv::getTableDependencies') && $deps = AppEnv::getTableDependencies($this->id))
      {
         foreach($deps as $childName=>$items) {
             if (is_array($items) && isset($items[0])) foreach($items as $no => $item) {
@@ -1376,12 +1376,24 @@ class CTableDefinition
   function ReadDefinition($fileName, $csetTo='', $foredit=0, $ischild=0) {
     # writeDebugInfo("$fileName, set to: [$csetTo]");
     $fext = strtolower(substr($fileName,-4));
+    if(substr($fext,0,1)!=='.') $fext = '';
     $this->_tplfile = $src_file = $fileName;
     $folders = self::$tplFolder;
-    if (class_exists('appEnv') && isset(appEnv::$tplFolders) && is_array(appEnv::$tplFolders))
-        $folders = array_merge($folders, appEnv::$tplFolders);
-     if($fext!=='.tpl' && $fext !=='.xml') {
+    $inMapFile = FALSE;
+    if (class_exists('AppEnv')) {
+        if(isset(AppEnv::$tplMappings) && is_array(AppEnv::$tplMappings) && isset(AppEnv::$tplMappings[$fileName])) {
+            $inMapFile = AppEnv::$tplMappings[$fileName];
+        }
+        if(isset(AppEnv::$tplFolders) && is_array(AppEnv::$tplFolders))
+            $folders = array_merge($folders, AppEnv::$tplFolders);
+    }
+
+    if($fext!=='.tpl' && $fext !=='.xml') {
         $fext = '.'.DEFAULT_TPLTYPE;
+        $chkName = ( $inMapFile ? $inMapFile : $fileName) . $fext;
+        if($inMapFile && is_file($chkName)) {
+            $fileName = $inMapFile; # use directly mapped tpl file
+        }
         if(file_exists($fileName.$fext)) {
           $this->_tplfile = $src_file = $fileName.$fext;
         }
@@ -1465,12 +1477,12 @@ class CTableDefinition
 
     $this->setBaseUri();
 
-    if(defined('FOLDER_TPL')) self::addTplFolder(constant('FOLDER_TPL'));
-    #    self::$tplFolder = defined('FOLDER_TPL') ? array('',constant('FOLDER_TPL')) : array('');
+    # if(defined('FOLDER_TPL')) self::addTplFolder(constant('FOLDER_TPL'));
+
     if(!defined('IMGPATH')) define('IMGPATH','img/'); # path to all button pics and other graphics
     if(defined('ADJACENTLINKS')) $this->_adjacentLinks = intval(constant('ADJACENTLINKS'));
-    # Support table prefix substitute, if set in appEnv class or global defined const : "%tabprefix%name" will converted to "somePrefix_name"
-    if(class_exists('appEnv') && property_exists('appEnv','TABLES_PREFIX')) self::$ast_tableprefix = appEnv::TABLES_PREFIX;
+    # Support table prefix substitute, if set in AppEnv class or global defined const : "%tabprefix%name" will converted to "somePrefix_name"
+    if(class_exists('AppEnv') && property_exists('AppEnv','TABLES_PREFIX')) self::$ast_tableprefix = AppEnv::TABLES_PREFIX;
     elseif(defined('AST_TABLEPREFIX')) self::$ast_tableprefix = constant('AST_TABLEPREFIX');
 
     $this->ajaxmode = $ajax;
@@ -1658,8 +1670,8 @@ class CTableDefinition
          if($sr_type === 'range') {
             $search1 = $this->drawInput($fname,'from','',$values);
             $search2 = $this->drawInput($fname,'to','',$values);
-            $lb_from = is_callable('appEnv::getLocalized') ? appEnv::getLocalized('label_range_from','') : ' ';
-            $lb_to   = is_callable('appEnv::getLocalized') ? appEnv::getLocalized('label_range_to','...') : '...';
+            $lb_from = is_callable('AppEnv::getLocalized') ? AppEnv::getLocalized('label_range_from','') : ' ';
+            $lb_to   = is_callable('AppEnv::getLocalized') ? AppEnv::getLocalized('label_range_to','...') : '...';
             $searchHtml = $fld->shortdesc . ': '. $lb_from . ' '.$search1 . ' ' . $lb_to .' '. $search2;
          }
          else {
@@ -3169,8 +3181,8 @@ function SaveAllWysiwygFields() {
 
          $val = isset($params[$editfld]) ? ($params[$editfld]) : '';
          $standalone = true;
-         if (is_callable('appEnv::isStandalone')){
-             $standalone =  appEnv::isStandalone();
+         if (is_callable('AppEnv::isStandalone')){
+             $standalone =  AppEnv::isStandalone();
          }
          if($fld->subtype === 'LOGIN') {
              if ($standalone) {
@@ -3186,6 +3198,7 @@ function SaveAllWysiwygFields() {
              $cnt = Astedit::$db->getQueryResult($this->id,'COUNT(1)',$where);
              if($cnt>0) return 'Выбранный логин уже был занят, выберите другой. Операция ввода отклонена ! !';
          }
+
          if($econd==='C' && $act==='doadd') {
            if($fld->_autoinc) continue;
            $val ='';
@@ -3197,11 +3210,10 @@ function SaveAllWysiwygFields() {
            if(!empty($val)) $vlst[$fld->id] = $val;
          }
          elseif(!empty($econd) && (isset($params[$fld->id]) || isset($params[$this->id.'_'.$fld->id])
-           || in_array($fetype[0],['BLIST','LISTEXT']) || $act==='doedit'))
+           || in_array($fetype[0],['BLIST','BLISTEXT','BLISTLINK']) || $act==='doedit'))
          { #<3>
            # $this->_prefixeditfield - returned fields may contain tablename_ prefix
            if($val=='' && IsNumberType($ftype,1)) $val = '0';
-
            if(in_array($fetype[0], ['BLIST','BLISTEXT','BLISTLINK'])) { # <4> merge _tmp_$flid_$val into "n1,n2,..." text field
               # TODO: refactor to _tmp_field_blist[] (array input) !
               $vals = array();
@@ -3253,8 +3265,8 @@ function SaveAllWysiwygFields() {
       } #<2>
       /*
       if ($this->debug == 99) {
-          appEnv::appendHtml('Prepared data to add:<pre>' . print_r($vlst,1) .'</pre>');
-          appEnv::finalize();
+          AppEnv::appendHtml('Prepared data to add:<pre>' . print_r($vlst,1) .'</pre>');
+          AppEnv::finalize();
       }
       */
       $result = -1;

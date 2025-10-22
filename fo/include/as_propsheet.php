@@ -6,8 +6,8 @@
 * @link http://www.selifan.ru
 *
 * @Copyright Alexander Selifonov, 2006-2024
-* @version 1.41.001
-* updated 2025-08-19
+* @version 1.42.001
+* updated 2025-09-26
 */
 define('TABSTYLE',0);
 define('WIZARDSTYLE',1);
@@ -109,16 +109,18 @@ class CFormField {
   public $options = '';
   public $maxlength = 0;
   public $width = 0;
+  public $height = 0;
   public $addparams = '';
   public $onchange = '';
   public $onclick = '';
+  public $checkevent = '';
   public $groupid = '';
   public $rowclass = '';
   public $children = NULL; # for toolbar type - buttons container
-  function __construct($name,$type='text',$prompt='',$initvalue='',$vlist='',
+  public function __construct($name,$type='text',$prompt='',$initvalue='',$vlist='',
             $maxlength=0,$width=0,$title='',$onchange='',$addprm='',$groupid='') {
-    $this->fname = $name;
-    if(is_array($type)) {
+      $this->fname = $name;
+      if(is_array($type)) {
         # WriteDebugInfo($name,': received array:', $type);
         $this->ftype = isset($type['type']) ? strtolower($type['type']) : 'text'; ;
         $this->prompt = isset($type['prompt']) ? $type['prompt'] : $this->fname;
@@ -127,14 +129,16 @@ class CFormField {
         $this->options = isset($type['options']) ? $type['options'] : $vlist;
         $this->maxlength = isset($type['maxlength']) ? $type['maxlength'] : 0;
         $this->width = isset($type['width']) ? $type['width'] : 0;
+        $this->height = isset($type['height']) ? $type['height'] : 0;
         $this->onchange = isset($type['onchange']) ? $type['onchange']:'';
         $this->onclick = isset($type['onclick']) ? $type['onclick']:'';
+        $this->checkevent = isset($type['checkevent']) ? $type['checkevent']:'';
         $this->addparams = isset($type['addparams']) ? $type['addparams']:$addprm;
         $this->groupid = isset($type['groupid']) ? $type['groupid']: $groupid;
         $this->rowclass = isset($type['rowclass']) ? $type['rowclass']: '';
         if(!empty($type['children'])) $this->children = $type['children'];
-    }
-    else {
+      }
+      else {
         $this->ftype = strtolower($type);
         $this->prompt = $prompt;
         $this->initvalue = $initvalue;
@@ -145,14 +149,42 @@ class CFormField {
         $this->onchange = $onchange;
         $this->addparams = $addprm;
         $this->groupid = $groupid;
-    }
-    if(!empty($this->options) && is_string($this->options)) {
+      }
+      if(!empty($this->options) && is_string($this->options)) {
         $this->options = GetArrayFromString($this->options);
-    }
+      }
+  }
+
+  public function renderMultiSelect($initValues)  {
+      $height = (($this->height>0) ? $this->height : CPropertySheet::$BLIST_HEIGHT) .'px';
+      $width = (($this->width>0) ? "width:{$this->width}px;" : '');
+      $arCurVal = is_array($initValues) ? $initValues : explode(',', $initValues);
+      # $msBody = "<table class='zebra'>";
+      $flname = $this->fname;
+      $lbclass = ' class="rt"'; # rt: right align label
+      $trAttr = " id=\"tr_$flname\""; # ID for table row (for dynamic hide/show)
+      if(!empty($this->rowclass)) {
+        $trAttr .= " class=\"{$this->rowclass}\"";
+      }
+      $msBody = "<tr $trAttr><td><div class='bordered' style='$width max-height:{$height}; overflow:auto;'>"
+        . "<table class='table table-striped table-hover table-bordered'>";
+      foreach($this->options as $no => $row) {
+          $rKeys = array_keys($row);
+          $itVal = $row[0] ?? $no;
+          $itLabel = $row[1] ?? $row[$rKeys[1]] ?? $row[$rKeys[0]];
+          if($itVal === '<') $msBody.= "  <tr><td><b>$itLabel</b></td></tr>\n";
+          else {
+              $checked = in_array($itVal,$arCurVal) ? "checked" : '';
+              $msBody .= "  <tr><td style='width:100%'><label><input type='checkbox' name='{$flname}[]' value='$itVal' $checked /> $itLabel</label></td></tr>\n";
+          }
+      }
+      $msBody .= "</table></div><td>$this->prompt</td></tr>";
+      return $msBody;
   }
 }
 
 class CPropertySheet {
+  const VERSION = '1.42';
   const STYLE_TABS   = 0;
   const STYLE_WIZARD = 1;
   const STYLE_UITABS = 10;
@@ -177,9 +209,12 @@ class CPropertySheet {
   var $_jqueryui = false;
   protected $tabNo = '';
   static public $_commonJsSent = FALSE;
-  static private $BLIST_HEIGHT = 120; // height in px for "blist" input field
+  static public $BLIST_HEIGHT = 120; // height in px for "blist" input field
   static private $sheet_cnt = 0; // increases each time when new CpropertySheet created, to create unique ID
   static private $sheetlist = array(); // all created shhet ID's, to avoid duplicates
+
+  public static function getVersion() { return self::VERSION; }
+
   function __construct($param, $width=null,$height=null,$sheetstyle=TABSTYLE, $tabsPos=false) {
       self::$sheet_cnt++;
       if(is_array($param)) { // all needed parameters pased in assoc.array
@@ -593,6 +628,8 @@ EOHTM;
     $htmlret .= "<table style='width:100%;'>\n";
     $inGroup = 0;
     $elems = [];
+    $chkLabel = is_callable('AppEnv::getConfigValue') ? AppEnv::getLocalized('cfg_btncheck_label','Check') : 'Check';
+    $chkLabelTitle = is_callable('AppEnv::getConfigValue') ? AppEnv::getLocalized('cfg_btncheck_title','Check value') : 'Check Value';
     foreach($fields as $ii=>$fdef) { #<3>
       if(!is_object($fdef)) continue;
       $fname = $fdef->fname;
@@ -608,6 +645,9 @@ EOHTM;
       if(!empty($fdef->maxlength)) $addstr .= " maxlength='{$fdef->maxlength}'";
       if(!empty($fdef->addparams)) $addstr .= ' '.$fdef->addparams;
       if(!empty($fdef->title)) $addstr .= " title='{$fdef->title}'";
+      $checkEvt = empty($fdef->checkevent) ? '' :
+         "</td><td><input type=\"button\" class=\"btn btn-primary\" style=\"float:right\"onclick=\"$fdef->checkevent\" "
+           . "value=\"$chkLabel\" title=\"$chkLabelTitle\"/>";
       $wdth = $fdef->width;
       $wpost = ($wdth==0 OR (strpos($fdef->width,'%') OR stripos($fdef->width,'px') OR stripos($fdef->width,'em'))) ? '':'px';
       if($wpost) $wdth = ((string)$wdth) . $wpost;
@@ -623,8 +663,9 @@ EOHTM;
       if (count($styles)) $style = " style='" . implode('; ', $styles) . "'";
 
       $trAttr = "id=\"tr_$fname\""; # ID for table row (for dynamic hide/show)
+      # $fdef->rowclass .= ' d-flex';
       if(!empty($fdef->rowclass)) {
-        $trAttr .= " class=\"{$fdef->rowclass}\"";
+            $trAttr .= " class=\"{$fdef->rowclass}\"";
       }
       # if($fdef->groupid) $trAttr .= " class=\"fmtr_{$fdef->groupid}\"";
       $addclasses = $fdef->groupid ? ' fmin_'.$fdef->groupid : '';
@@ -652,27 +693,33 @@ EOHTM;
               $addstr .= ' ondblclick="this.value=decodeURI(this.value)"';
           }
           $htmlret .= "<tr $trAttr>"
-           . "<td $lbclass><input type=\"text\" name=\"$fname\" id=\"$fname\" class=\"{$as_cssclass['textfield']}$addclasses\"{$style}{$addstr} value=\"$init\"></td><td nowrap=\"nowrap\">$prompt</td></tr>\n";
+            . "<td $lbclass><input type=\"text\" name=\"$fname\" id=\"$fname\" class=\"{$as_cssclass['textfield']}$addclasses\"{$style}{$addstr} "
+            . "value=\"$init\"></td><td nowrap=\"nowrap\">$prompt {$checkEvt}</td></tr>\n";
           break;
         case 'number': case 'int':
           $init=str_replace("'",'',$init);
-          $htmlret .= "<tr $trAttr><td $lbclass><input type=\"number\" name=\"$fname\" id=\"$fname\" class='{$as_cssclass['textfield']}$addclasses ct'{$style}{$addstr} value='$init' onchange='NumberRepair(this,true)'></td><td>$prompt</td></tr>\n";
+          $htmlret .= "<tr $trAttr><td $lbclass><input type=\"number\" name=\"$fname\" id=\"$fname\" class='{$as_cssclass['textfield']}"
+            . "$addclasses ct'{$style}{$addstr} value='$init' onchange='NumberRepair(this,true)'></td><td>$prompt {$checkEvt}</td></tr>\n";
           break;
         case 'password':
-          $htmlret .= "<tr $trAttr><td width=\"99%\" $lbclass><input type='password' name=\"$fname\" id=\"$fname\" class='{$as_cssclass['textfield']}$addclasses' {$style}{$addstr} value='$init'></td><td>$prompt</td></tr>\n";
+          $htmlret .= "<tr $trAttr><td width=\"99%\" $lbclass><input type='password' name=\"$fname\" id=\"$fname\" class='{$as_cssclass['textfield']}"
+            . "$addclasses' {$style}{$addstr} value='$init'></td><td>$prompt {$checkEvt}</td></tr>\n";
           break;
         case 'date':
           if(strlen($init)>7 AND intval($init)>1000) $init = to_char($init);
-          $htmlret .= "<tr $trAttr><td$lbclass><input type='text' name=\"$fname\" id=\"$fname\" class='{$as_cssclass['textfield']}$addclasses datefield' {$style}{$addstr} value='$init'></td><td>$prompt</td></tr>\n";
+          $htmlret .= "<tr $trAttr><td$lbclass><input type='text' name=\"$fname\" id=\"$fname\" class='{$as_cssclass['textfield']}$addclasses datefield'"
+            . " {$style}{$addstr} value='$init'></td><td>$prompt {$checkEvt}</td></tr>\n";
           break;
         case 'textarea':
-          $htmlret .= "<tr $trAttr><td colspan='2'>$prompt<br><textarea name=\"$fname\" id=\"$fname\" class='{$as_cssclass['textfield']}$addclasses' {$style}>$init</textarea></td></tr>\n";
+          $htmlret .= "<tr $trAttr><td colspan='2'>$prompt {$checkEvt}<br><textarea name=\"$fname\" id=\"$fname\" class='{$as_cssclass['textfield']}$addclasses'"
+            . " {$style}>$init</textarea></td></tr>\n";
           break;
 
         case 'checkbox':
           $chk = $init?'checked':'';
           $onClick= empty($fdef->onchange)? '':" onClick='{$fdef->onchange}'";
-          $htmlret .= "<tr $trAttr><td class='$addclasses' style='text-align:right'><input type='checkbox' name=\"$fname\" id=\"$fname\" value='1' {$addstr} {$onClick} {$chk}/></td><td><label for='$fname'>$prompt</label></td></tr>\n";
+          $htmlret .= "<tr $trAttr><td class='$addclasses' style='text-align:right'><input type='checkbox' name=\"$fname\" id=\"$fname\" value='1'"
+            . " {$addstr} {$onClick} {$chk}/></td><td><label for='$fname'>$prompt {$checkEvt}</label></td></tr>\n";
           break;
 
         case 'select':
@@ -680,19 +727,12 @@ EOHTM;
           $lst = $fdef->options;
           if(is_array($lst))
               $htmlret .= DrawSelectOptions($lst, $init, TRUE)
-                       . "</select></td><td>$prompt</td></tr>\n";
+                       . "</select></td><td>$prompt {$checkEvt}</td></tr>\n";
           break;
 
+        case 'blist':
         case 'multi-select':
-          $mulHeight = "10"; # TODO: make configurable height
-          $htmlret .= "<tr $trAttr><td$lbclass><select name=\"$fname\" multiple=\"multiple\" size='$mulHeight' id=\"$fname\" "
-            . "class='{$as_cssclass['textfield']}$addclasses'{$style} {$addstr}>\n";
-          $lst = $fdef->options;
-          if(is_array($lst)) {
-              if(is_string($init)) $init = explode(',', $init); # comma separated list?
-              $htmlret .= DrawSelectOptions($lst, $init, TRUE)
-                       . "</select></td><td>$prompt</td></tr>\n";
-          }
+          $htmlret .= $fdef->renderMultiSelect($init);
           break;
 
         case 'button':
@@ -700,20 +740,6 @@ EOHTM;
           $onClick= empty($evt)? '':" onclick=\"$evt\"";
           $htmlret .= "<tr ><td>&nbsp;</td><td><input type=\"button\" name='$fname' class='{$as_cssclass['button']}' "
            . "{$style}{$addstr}{$onClick} {$addstr} value=\"$prompt\" /></td></tr>\n";
-          break;
-
-        case 'blist':
-          $htm = "<tr $trAttr><td><div class='bordered' style='padding:2px; max-height:".self::$BLIST_HEIGHT."px; overflow:auto;'><table class='table table-striped table-hover table-bordered'>"; # build multi-checkbox list
-          $lst = $fdef->options;
-          $initarr = explode(',', $init);
-          if(is_array($fdef->options))  foreach ($fdef->options as $k=>$val) {
-              if (is_array($val) && count($val)>1) { $k=$val[0]; $val=$val[1]; }
-              elseif (is_array($val)) { $keys = array_keys($val); $val = $val[$keys[0]]; }
-              $chk = (in_array($k,$initarr) ? 'checked="checked"':'');
-              $htm .= "<tr><td style='width:100%'><label><input type='checkbox' name='{$fname}[]' value='$k' $chk/> $k-$val</label></td></tr>";
-          }
-          $htm .= "</table></div></td><td>$prompt</td></tr>";
-          $htmlret .= $htm;
           break;
 
         case 'toolbar': # toolbar with buttons (or other controls)
@@ -728,7 +754,8 @@ EOHTM;
 
         default:
           $init=str_replace("'",'"',$init);
-          $htmlret .= "<tr $trAttr><td><input type=\"text\" name=\"$fname\" id=\"$fname\" class='{$as_cssclass['textfield']}$addclasses {$fdef->ftype}'{$style}{$addstr} value='$init'></td><td>$prompt</td></tr>\n";
+          $htmlret .= "<tr $trAttr><td><input type=\"text\" name=\"$fname\" id=\"$fname\" class='{$as_cssclass['textfield']}$addclasses"
+            . " {$fdef->ftype}'{$style}{$addstr} value='$init'></td><td>$prompt {$checkEvt}</td></tr>\n";
           break;
 
       } #<4>

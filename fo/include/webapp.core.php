@@ -2,13 +2,13 @@
 /**
 * @package webapp.core - Core classes / framework for [corporate] Web application
 * @name webapp.core.php
-* @version 1.29.004
-* modified : 2025-08-20
+* @version 1.30.002
+* modified : 2025-09-26
 * by Alexander Selifonov
 **/
 abstract class appPlugins {
 
-    protected $_my_roles = array();
+    protected $_my_roles = [];
     protected $_my_folder = ''; # Must be redefined in real class according to the real class sub-folder in "plugins/"
     protected $backend = NULL; // will be "backend" object
     public $inReports = FALSE; // include objects in global reports
@@ -70,7 +70,7 @@ abstract class appPlugins {
 
 abstract class WebApp {
 
-    const VERSION = '1.27';
+    const VERSION = '1.30';
     static $FOLDER_ROOT = '';
     static $FOLDER_APP = '';
     static $BASEURL = ''; # used in building "absolute" URI's in application
@@ -118,10 +118,10 @@ abstract class WebApp {
 
     static $_debug = 0; // Turn ON for debug logging
     static protected $INDEX_COLUMNS = 2;
-    public static $_p = array();
+    public static $_p = [];
     public static $db = null;
     static public $auth = null;
-    static $_stubcode = array();
+    static $_stubcode = [];
     static $isMobile = FALSE; # auto-detecting client Mobile devices
     static $deviceType = 'computer';
     static private $_deferredHeader = FALSE;
@@ -133,40 +133,41 @@ abstract class WebApp {
     static protected $_footerDrawn = FALSE;
     static protected $_page_title = '';
     static protected $i18n = array('charset'=>'windows-1251','_language_'=>'ru');
-    static protected $postparams = array();
-    static protected $getparams = array();
+    static protected $postparams = [];
+    static protected $getparams = [];
     static protected $paramsChain; // chain of params come in GET: p=goods/par1/pa2/par3/... gets [par1,par2,par23,...]
     static protected $err_message;
     static protected $_prmHandled = FALSE;
-    static protected $_table_privileges = array();
+    static protected $_table_privileges = [];
 
     static protected $editRefPrenedData = [];
 
-    static $deptlist_users = array(); # dept list consumers
+    static $deptlist_users = []; # dept list consumers
 
-    static $_plugins = array();
-    static $_tableSets = array();
-    private static $_hooks = array(); # Hook functions to add here: $_hooks['funcname'] = array('user_func_name',...);
+    static $_plugins = [];
+    static $_tableSets = [];
+    private static $_hooks = []; # Hook functions to add here: $_hooks['funcname'] = array('user_func_name',...);
 
     static public $_pwdmgr = null;
-    static $_tableList = array();
+    static $_tableList = [];
     static private $_menuclass = 'jd_menu'; # default className for top-level menu <UL> element
-    static $_mainmenu = array();
+    static $_mainmenu = [];
     static $mainmenuHtml = ''; # prepared HTML code for main menu
-    static $_cached_deptcodes =  array();
-    static $_cache =  array();
-    static $_cachedagt = array();
-    static $_defcfg = array(); // configuration parameters definition
+    static $_cached_deptcodes =  [];
+    static $_cache =  [];
+    static $_cachedagt = [];
+    static $_defcfg = []; // configuration parameters definition
     static /*protected*/ $_cfg = []; // configuration parameters
-    static $_cfgpages = array(); // config pages definitions
-    static $_optcache = array(); # for cacheing request results
-    static $allRoles = array();
-    static protected $_rolesFilter = array();
+    static $_cfgpages = []; // config pages definitions
+    static $_optcache = []; # for cacheing request results
+    static $allRoles = [];
+    static protected $_rolesFilter = [];
     static protected $_tracer = null;
-    static $tplFolders = array();
-    static $filesAllowedModules = array();
+    static $tplFolders = []; // table definition (tpl) folders to search in
+    static $tplMappings = []; // table definition (tpl) file mappings
+    static $filesAllowedModules = [];
     static $start_dept = 0;
-    private static $_filecategs = array();
+    private static $_filecategs = [];
     protected static $_startpage_uri = ''; # can be overwriten for some logged in users (depending on their primary role)
     protected static $SERIALIZE_DECIMALS = 4; # decimal accuracy for serializeData()
     private static $_testing_mode = FALSE;
@@ -174,10 +175,10 @@ abstract class WebApp {
     static protected $pwd_salt = '#Tyjhgv38-45%HFD2687650987871.Asdtru-7wnFghtuYOps';
     static $gridObj = null; # astedit class instance
     static $IFACE_WIDTH = 0; # Global interface width (enable o limit width of all forms in app)
-    static protected $_http_headers = array();
+    static protected $_http_headers = [];
     static protected $_html_body = '';
-    static $uploadFolders = array(); # list of all folders where users can uplaod files
-    static $fileFolders = array(); # list of all folders that will be activ in web-admin panel "files"
+    static $uploadFolders = []; # list of all folders where users can uplaod files
+    static $fileFolders = []; # list of all folders that will be activ in web-admin panel "files"
 
     // vars for tracking memory using to avoid memory limit exception
     static private $_mem_limit = false;
@@ -277,7 +278,7 @@ abstract class WebApp {
                 header("$id: $val");
             }
         }
-        self::$_http_headers = array();
+        self::$_http_headers = [];
     }
 
     # @since 0.9.43
@@ -304,7 +305,7 @@ abstract class WebApp {
     # returns TRUE if AJAX request detected, FALSE otherwise
     public static final function isAjax() {
         $ajx = isset($_SERVER['HTTP_X_REQUESTED_WITH']) ? $_SERVER['HTTP_X_REQUESTED_WITH'] : 'none';
-        return (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtoupper($_SERVER['HTTP_X_REQUESTED_WITH']) === 'XMLHTTPREQUEST');
+        return (strtoupper($ajx) === 'XMLHTTPREQUEST');
     }
     /**
     * sets flag of "API call"
@@ -395,6 +396,13 @@ abstract class WebApp {
         $folder = str_replace("\\",'/',$folder);
         if(!in_array($folder,self::$tplFolders)) self::$tplFolders[] = $folder;
     }
+    # add exact mapping for one table template file
+    public static function addTplMapping($tplId, $basePath) {
+        self::$tplMappings[$tplId] = $basePath;
+    }
+    public static function addTplMappings(array $arMappings) {
+        self::$tplMappings = array_merge(self::$tplMappings, $arMappings);
+    }
     public static function getRequestParams() { return self::$_p; }
     public static function getRequestParamsCount() { return count(self::$_p); }
 
@@ -408,7 +416,7 @@ abstract class WebApp {
         return NULL;
     }
     public static function setCached($type, $keyvalue, $value) {
-        if(!isset(self::$_optcache[$type])) self::$_optcache[$type] = array();
+        if(!isset(self::$_optcache[$type])) self::$_optcache[$type] = [];
         self::$_optcache[$type][$keyvalue] = $value;
     }
     /**
@@ -423,7 +431,7 @@ abstract class WebApp {
 
     # Register table names for managing in admin panel
     public static function addAppTables($par){
-        $lst = is_string($par) ? explode(',', $par) : (is_array($par)?$par:array());
+        $lst = is_string($par) ? explode(',', $par) : (is_array($par)?$par:[]);
         foreach($lst as $k=>$v) {
             if (in_array($v, self::$_tableList)) continue;
             if (is_numeric($k)) self::$_tableList[] = $v;
@@ -500,7 +508,7 @@ abstract class WebApp {
     * @param mixed $crumbs
     * @param string $menustyle : if 'bootstrap',  will make all HTML code iwith bootstrap styles.
     */
-    public static function generateMenu($data, &$menubody, $id='',$crumbs=array(), $menustyle = '') {
+    public static function generateMenu($data, &$menubody, $id='',$crumbs=[], $menustyle = '') {
         $rightMnu = ''; # login, logoff, signup - in the right menu!
         $mob = HeaderHelper::$mobile_style;
         $ulcls = $liSubMnuCls = $aSubmnuAttr = $apostfix = $licls = $aSubCls = '';
@@ -710,7 +718,7 @@ abstract class WebApp {
         $a_keys = array_keys(self::$_mainmenu);
         $no = array_search($id_before, $a_keys);
         if($no===FALSE) return FALSE;
-        $newelem = array($menuid => array('title'=>$titlestr, 'submenu'=>array()));
+        $newelem = array($menuid => array('title'=>$titlestr, 'submenu'=>[]));
         self::$_mainmenu = array_merge( array_slice(self::$_mainmenu,0,$no), $newelem,  array_slice(self::$_mainmenu,$no));
         return $no;
     }
@@ -757,7 +765,7 @@ abstract class WebApp {
                 $objref[$subid] = array('title'=>  self::getLocalized($subid,$subid));
                 # WriteDebugInfo('try to find string '.$subid);
             }
-            if (!isset($objref[$subid]['submenu'])) $objref[$subid]['submenu'] = array();
+            if (!isset($objref[$subid]['submenu'])) $objref[$subid]['submenu'] = [];
             $objref =& $objref[$subid]['submenu'];
         }
 
@@ -771,7 +779,7 @@ abstract class WebApp {
             }
 
             if (isset(self::$i18n[$title])) $title = self::$i18n[$title]; # string ID passed
-            $objref[$itemid] = array();
+            $objref[$itemid] = [];
             $objref[$itemid]['title'] = $title;
 
             if(!empty($href)) $objref[$itemid]['href'] = $href;
@@ -795,7 +803,7 @@ abstract class WebApp {
     public static function addSubmenuItems($menuid, $items) {
 
         if(!isset(self::$_mainmenu[$menuid])) return FALSE;
-        if(!isset(self::$_mainmenu[$menuid]['submenu'])) self::$_mainmenu[$menuid]['submenu'] = array();
+        if(!isset(self::$_mainmenu[$menuid]['submenu'])) self::$_mainmenu[$menuid]['submenu'] = [];
         foreach($items as $id=>$item) {
             self::$_mainmenu[$menuid]['submenu'][$id] = $item;
         }
@@ -810,7 +818,7 @@ abstract class WebApp {
     }
     # returns "ready-to-use" array of foreign-key constraints, in format Astedit::CHILDTABLES|userFunc
     public static function getDeptListUsers() {
-        $ret = array();
+        $ret = [];
         foreach (self::$deptlist_users as $no => $item) {
             $ret[] = array($item['table'], 'dept_id', $item['field'], $item['message']);
         }
@@ -880,7 +888,7 @@ abstract class WebApp {
                     continue;
                 }
                 $pagelog = isset($pageitem['log']) ? (int)$pageitem['log'] : 0; # logging all changes of parameters
-                $fields = array();
+                $fields = [];
                 # if($pageid === 'config_zdebug') writeDebugInfo(" fields: ", $pageitem->fields);
                 foreach($pageitem->fields->children() as $fkey=>$fdef) {
                     $fname = isset($fdef['name']) ? (string)$fdef['name'] : '';
@@ -908,6 +916,7 @@ abstract class WebApp {
                     }
 
                     $width = isset($fdef['width']) ? (string)$fdef['width'] : 0;
+                    $height = isset($fdef['height']) ? (string)$fdef['height'] : 0;
                     $default = isset($fdef['default']) ? (string)$fdef['default'] : '';
                     $onchange = isset($fdef['onchange']) ? (string)$fdef['onchange'] : '';
                     $onclick = isset($fdef['onclick']) ? (string)$fdef['onclick'] : '';
@@ -918,11 +927,13 @@ abstract class WebApp {
                     $groupid = isset($fdef['groupid']) ? (string)$fdef['groupid'] : '';
                     $rowclass = isset($fdef['rowclass']) ? (string)$fdef['rowclass'] : '';
                     $onclick = isset($fdef['onclick']) ? (string)$fdef['onclick'] : '';
+                    $checkevent = isset($fdef['checkevent']) ? (string)$fdef['checkevent'] : '';
                     $options = isset($fdef['options']) ? self::toClientCset((string)$fdef['options']) : '';
                     $fields[$fname] = array('name'=>$fname, 'type'=>$ftype,'label'=>$label,'title'=>$title
-                       ,'width'=>$width,'onchange'=>$onchange,'onclick'=>$onclick
+                       ,'width'=>$width, 'height'=> $height, 'onchange'=>$onchange,'onclick'=>$onclick
                        ,'options'=>$options,'attribs'=>$attribs,'groupid' => $groupid
                        ,'default'=>$default, 'log'=>$logging, 'onclick' => $onclick, 'rowclass'=>$rowclass
+                       ,'checkevent' => $checkevent
                        ,'children' => $arrButt
                     );
                 }
@@ -960,7 +971,7 @@ abstract class WebApp {
         }
         //, get_class_methods());
         foreach(self::$ini->_iniParsedArray as $pageid=>$page) {
-            # if(!isset(self::$_cfg[$pageid])) self::$_cfg[$pageid] = array();
+            # if(!isset(self::$_cfg[$pageid])) self::$_cfg[$pageid] = [];
             # if(!is_array($page))
             self::$_cfg = array_merge(self::$_cfg, $page); # TODO: split array with "plugin" names (avoid overwriting vars)
         }
@@ -997,7 +1008,9 @@ abstract class WebApp {
                 $fid = $fdef['name'];
                 if ( in_array($fdef['type'], ['header','button']) ) continue;
                 $nval = isset($newvalues[$fid]) ? $newvalues[$fid] : '';
-                if ( is_array($nval) ) $nval = implode(',', $nval);
+                if ( is_array($nval) ) {
+                    $nval = implode(',', $nval);
+                }
                 $realpage = ($fid==='maintenancemode') ? 'system' : $pageid;
                 $oldval = self::getConfigValue($fid);
                 if ($oldval !== $nval) {
@@ -1105,7 +1118,7 @@ abstract class WebApp {
     * @param mixed $opertype
     */
     public static function runPlugins($opertype, $params=null, $pluginName='') {
-        $result = array();
+        $result = [];
         if($pluginName && !empty(self::$_plugins[$pluginName])) {
             # если передано точное имя класса плагина, выполняю только его методы:
             if (method_exists(self::$_plugins[$pluginName], 'dispatch'))
@@ -1220,7 +1233,7 @@ abstract class WebApp {
         }
 
 
-        $pgtitle = ''; $submnu = array();
+        $pgtitle = ''; $submnu = [];
         self::$_action = $action = isset(self::$_p['action']) ? self::$_p['action'] : '';
         if(!empty($prm['drawmenu'])) {
 
@@ -1229,7 +1242,7 @@ abstract class WebApp {
             $fullid = implode('_',$menuid);
             if (count($menuid)===1) {
                 $pgtitle = isset(self::$_mainmenu[$menuid[0]]['title']) ? self::$_mainmenu[$menuid[0]]['title'] : '';
-                $submnu  = isset(self::$_mainmenu[$menuid[0]]['submenu']) ? self::$_mainmenu[$menuid[0]]['submenu'] : array();
+                $submnu  = isset(self::$_mainmenu[$menuid[0]]['submenu']) ? self::$_mainmenu[$menuid[0]]['submenu'] : [];
             }
             elseif (count($menuid)===2) {
                 $pgtitle = isset(self::$_mainmenu[$menuid[0]]['submenu'][$menuid[1]]['title'])?
@@ -1555,7 +1568,7 @@ EOHTM;
     public static function BuildMainMenu() {
 
       $admlev = $auth->getAccessLevel('admin');
-      self::$_mainmenu = array();
+      self::$_mainmenu = [];
       self::$_mainmenu['start'] = array('href'=>'./', 'title' => self::getLocalized('page.home'));
 
       # Заранее готовлю заглушки под "базовые" подменю:
@@ -1568,13 +1581,13 @@ EOHTM;
       self::$_mainmenu['mnu_docs']    = array('title'=> self::getLocalized('mnu-help'));
       if($auth->IsUserLogged()) {
 
-        $subm_in = array();
+        $subm_in = [];
 #        if($admlev) $subm_in['in_stmt_numbers'] = array('href'=>'./?p=fm_setstmtnumbers','title'=>self::getLocalized('mnu_set_stmt_numbers'));
 
         if(count($subm_in)>0) self::$_mainmenu['inputdata']['submenu'] = $subm_in;
 
         if($admlev) {
-            $submenu = array();
+            $submenu = [];
             if(SuperVisorMode()) $submenu['config'] = array('href'=>'config.php', 'title'=>self::getLocalized('title-appconfig'));
             $submenu['log'] =  array('href'=>'eventlog.php', 'title'=>self::getLocalized('page.browse.eventlog'));
             $submenu['depts'] = array('href'=>'depts.php', 'title'=>self::getLocalized('mnu-deptlist'));
@@ -1588,7 +1601,7 @@ EOHTM;
             self::$_mainmenu['mnu_admin']['submenu'] = $submenu;
         }
 
-        $submenu2 = array();
+        $submenu2 = [];
         $submenu2['myrights'] = array('title'=>self::getLocalized('mnu-view-my-rights'), 'href'=>'./?p=myrights');
 
         if(self::$auth->getAccessLevel(self::ACTION_ADMIN)) {
@@ -1626,7 +1639,7 @@ EOHTM;
 
         $lang = self::getClientLanguage();
         # $dead = PM::$deadProducts ?? 'No deads';  writeDebugInfo("dead: ", $dead);
-        $incl = array();
+        $incl = [];
         $files = glob(self::$FOLDER_ROOT . self::$FOLDER_PLUGINS . '*.php');
 
         if(is_array($files)) foreach($files as $fullname) {
@@ -1727,7 +1740,7 @@ EOJS;
             $draw_page = (!empty($page['enabled']) && function_exists($page['enabled'])) ? call_user_func($page['enabled']) : TRUE;
             if(!$draw_page) continue; # don't draw config page if callback function says "no" (FALSE)
 
-            $fieldlist = array();
+            $fieldlist = [];
             foreach($page['fields'] as $fid=>$fdef) {
                 # WriteDebugInfo('config fdef:', $fdef);
                 $fid = $fdef['name'];
@@ -1848,7 +1861,7 @@ EOJS;
     *
     * @param mixed $params : assoc array with keys: 'to', 'from','subj','message'
     */
-    public static function sendEmailMessage($params = array(), $files = array(), $withDebug = NULL) {
+    public static function sendEmailMessage($params = [], $files = [], $withDebug = NULL) {
 
         $toAddr = isset($params['to']) ? $params['to'] : '';
         if($toAddr == '') return FALSE;
@@ -2023,7 +2036,7 @@ EOJS;
     //эта функция рекурсивно обходит все папки и составляет список файлов
     //результат её работы можете посмотреть, выведя var_dump($allfiles) после её вызова
     public static function recoursiveDir($dir){
-        $allfiles = array();
+        $allfiles = [];
 
         if ($files = glob($dir.'/*'))
             foreach($files as $file){
@@ -2056,7 +2069,7 @@ EOJS;
     public static function getRefPrivileges($tableid) {
 
         if (isset(self::$_table_privileges[$tableid])) {
-            $retlevel = array(array(),array(),array());
+            $retlevel = array([],[],[]);
             foreach(self::$_table_privileges[$tableid] as $oneright=>$rlevel) {
                 $right_val = self::$auth->getAccessLevel($oneright);
                 if (!$rlevel) continue;
@@ -2146,7 +2159,7 @@ EOJS;
     */
     public static function addInstantMessage($txt,$id='') {
         if(!$id) $id = 'msg'.rand(10000000,999999999);
-        if(!isset($_SESSION['instant_msg'])) $_SESSION['instant_msg'] = array();
+        if(!isset($_SESSION['instant_msg'])) $_SESSION['instant_msg'] = [];
         $_SESSION['instant_msg'][$id] = $txt;
     }
     public static function addShowMessage($strg) {
@@ -2330,7 +2343,7 @@ EOJS;
             return $ret;
         }
         preg_match_all($pattern, $body, $matches,PREG_SET_ORDER);
-        $ret = array();
+        $ret = [];
         if (is_array($matches)) foreach($matches as $elem) {
             $splt = explode('.', $elem[1]);
             $vval = isset($elem[2])? $elem[2] : '';
@@ -2339,7 +2352,7 @@ EOJS;
             $vkey = $elem[1];
             if(count($splt)>1) { # [0.var1=value01] will become $ret[0]['var1'] = 'value1'
                 $ino = is_numeric($splt[0]) ? intval($splt[0]) : $splt[0];
-                if (!isset($ret[$ino])) $ret[$ino] = array();
+                if (!isset($ret[$ino])) $ret[$ino] = [];
                 $ret[$ino][$splt[1]] = $vval;
             }
             else $ret[$elem[1]] = $vval;
@@ -2354,7 +2367,7 @@ EOJS;
     * @param mixed $userfunc
     */
     public static function addHook($hookedfunc, $userfunc) {
-        if (!isset(self::$_hooks[$hookedfunc])) self::$_hooks[$hookedfunc] = array();
+        if (!isset(self::$_hooks[$hookedfunc])) self::$_hooks[$hookedfunc] = [];
         self::$_hooks[$hookedfunc][] = $userfunc;
     }
 
@@ -2422,7 +2435,7 @@ EOJS;
     public static final function rotateFiles($folder, $mask='', $days=10) {
 
         $watermark = strtotime("-$days days");
-        $darr = array();
+        $darr = [];
         $deleted = 0;
 
         if (is_dir($folder) && $mask!='' && $days > 0) {
