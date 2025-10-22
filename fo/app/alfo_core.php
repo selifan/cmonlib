@@ -5,9 +5,9 @@
 * @link: http://www.allianzlife.ru,
 * @name alfo_core.php
 * Base WebApp extending module
-* @version 2.141.001
+* @version 2.144.001
 * Bitrix integration aware
-* modified : 2025-09-18
+* modified : 2025-10-22
 **/
 #ini_set('display_errors',1); ini_set('error_reporting',E_ALL);
 # if(!defined('JQUERY_VERSION')) define('JQUERY_VERSION', '2.2.2.min');//    1.11.3.min | 2.2.2.min.js
@@ -16,8 +16,8 @@ define('USE_JQUERY_UI',1); # astedit.php will use jquery.ui css
 include_once(__DIR__ . '/../cfg/_appcfg.php');
 include_once(__DIR__ . '/../cfg/folders.inc');
 
-define('APPDATE', '18.09.2025');
-define('APP_VERS', '2.141');
+define('APPDATE', '22.10.2025');
+define('APP_VERS', '2.144');
 
 if (!constant('IN_BITRIX') || !empty($_SESSION['log_errors'])) {
     # error_reporting(E_ALL & ~E_STRICT & ~E_NOTICE & ~E_WARNING);
@@ -41,7 +41,7 @@ if (!defined('DB_DEFAULTCHARSET'))
 mb_internal_encoding(MAINCHARSET);
 
 # define ('UI_THEME', 'flick'); # jQuery.ui theme
-define('FOLDER_TPL', 'app/tpl/'); # astedit/waCRUDER table definitions folder
+# define('FOLDER_TPL', 'app/tpl/'); # astedit/waCRUDER table definitions folder
 
 define('USE_PSW_POLICIES',1); # использование раздельных парольных политик
 
@@ -102,11 +102,10 @@ class AppEnv extends WebApp {
     static $POOL_WARNING_THRESHOLD2 = 20; # второй порог пердупреждения!
     static $mobile = NULL;
 
-    const TABLE_UPLOADEDFILES ='alf_uploadedfiles'; # таблица список загруженных файлов документов
     # const TABLE_DEPT_PRODUCTS ='alf_dept_product';  # список прав и комиссий подразделений в продуктах
     # const TABLE_PROFESSIONS ='alf_professions';  # 24.04.2018 - список профессий
     static $FOLDER_FILES = 'files/';
-    static $table_uploadedfiles ='alf_uploadedfiles';
+    # static $table_uploadedfiles ='alf_uploadedfiles';
     private static $userMetaType = FALSE;
 
     const RIGHT_DOCFLOW = 'docflow_oper'; # видны все полисы, есть право выгрузки в СЭД
@@ -297,7 +296,9 @@ class AppEnv extends WebApp {
         if (defined('IF_LIMIT_WIDTH'))  self::$IFACE_WIDTH = constant('IF_LIMIT_WIDTH');
         # self::$_debug = TRUE; // Turn ON for debug logging
         parent::init(FALSE);
+
         if(superAdminMode()) {
+            # Для гридов astedit активирую модули экспорта-импорта настроек,тарифов (DB <-> XML)
             DneAssist::init();
         }
 
@@ -312,10 +313,16 @@ class AppEnv extends WebApp {
         $detect = new Mobile_Detect();
         self::$mobile = $detect->isMobile();
 
-        self::addTplFolder(ALFO_ROOT . 'app/tpl/');
-        # конструктор стр.программ (из НСЖ.nsj)
-        if(is_dir(ALFO_ROOT . 'iconst/tpl/')) self::addTplFolder(ALFO_ROOT . 'iconst/tpl/');
+        self::addTplFolder(ALFO_ROOT . 'app/tpl/'); # все основные описания таблиц здесь!
 
+        # конструктор стр.программ (из НСЖ.nsj)
+        $iconstTpl = self::getAppFolder('iconst/tpl/');
+        if(is_dir($iconstTpl)) # self::addTplFolder(ALFO_ROOT . 'iconst/tpl/');
+            self::addTplMappings([
+                'alf_nsjdocfiles' => $iconstTpl . 'alf_nsjdocfiles',
+                'alf_nsjprograms' => $iconstTpl . 'alf_nsjprograms',
+                'alf_nsjprgrisks' => $iconstTpl . 'alf_nsjprgrisks',
+            ]);
         if (class_exists('PolicyModel')) PolicyModel::init();
         parent::setTablesPrefix(self::TABLES_PREFIX);
         if(($dmob = self::getConfigValue('sys_detectmobile'))) {
@@ -358,14 +365,6 @@ class AppEnv extends WebApp {
 	        self::$auth->handleRequests(); # handle all 'auth_action' requests first!
 
 	        if (SuperAdminMode()) self::enableConfigPage();
-            /*
-			# таблицы, которые может править супер-операционист
-	        AppEnv::addRefPrivileges(PM::RIGHT_SUPEROPER, # was 'bank:superoper'
-	          [ 'alf_countries','alf_product_config','alf_dept_product','stmt_ranges', 'alf_agmt_risks',
-                PM::T_PROMOACTIONS, PM::TABLE_TRANCHES, PM::T_PROFESSIONS
-              ]
-	        );
-            */
 
 	        # добавляем в админ-панель списки системных таблиц
             if($usePswPolicy) {
@@ -825,7 +824,7 @@ class AppEnv extends WebApp {
             $pDept = OrgUnits::getPrimaryDept();
             $where[] = "(f_restrict = '' OR FIND_IN_SET('$pDept',f_restrict))";
         }
-        $arr = self::$db->select(self::$table_uploadedfiles, array('where'=>$where, 'orderby'=>'category,id'));
+        $arr = self::$db->select(PM::T_UPLOADEDFILES, array('where'=>$where, 'orderby'=>'category,id'));
         # WriteDebugInfo("files select:",self::$db->getLastQuery()); WriteDebugInfo("files list:",$arr);
         $categs = FileUtils::getFileCategories();
         $curcat = '***';
@@ -869,7 +868,7 @@ class AppEnv extends WebApp {
 
         include_once('astedit.php');
 
-        $tbl = new CTableDefinition(PM::T_UPLOADEDFILES); # 'alf_uploadedfiles'
+        $tbl = new CTableDefinition(PM::T_UPLOADEDFILES);
         # $tbl->setBlistSize('240px');
         # $tbl->setBrowseFilterFn('banki_usersfilter');
         if(self::isAjax()) {
@@ -1262,7 +1261,58 @@ EOF;
         }
         return $arValues;
     }
+    # вернет если юзер имеет права для "глобального" просмотра договоров
+    public static function isGlobalViewRights() {
+        if(SuperAdminMode()) return 100;
+        return self::$auth->userHasRights([PM::RIGHT_COMPLIANCE, PM::RIGHT_INFOSEC]);
+    }
+    # вьюха на ВСЕ полисы (по всем модулям - но только тем, которые сохраняют карточки в PM::T_POLICIES
+    public static function allagr() {
+        include_once('astedit.php');
+        $tbl = new CTableDefinition(PM::T_POLICIES);
+        $tbl->setBaseUri("./?p=allagr");
 
+        # {upd/2024-03-13} фильтры по номеру полиса в одном продукте не будут влиять на просмотр другого
+        $tbl->setFilterPrefix('_all_agrs_');
+
+        $myRights = self::isGlobalViewRights(); # супер-админ может удалять полисы
+        if(empty($myRights))self::echoError('err-no-rights');
+        $fldlist = 'policyno,insurer_fullname,datefrom,term,created,stateid,statedate';
+        $tbl->SetView($fldlist);
+        # $tbl->addBrowseFilter("module='$plg'");
+        $hideCanceled = UserParams::getSpecParamValue(0,PM::USER_CONFIG,'show_canceled');
+        if($hideCanceled === 'hide') $tbl->addBrowseFilter("stateid NOT IN(9,10)"); # PM::STATE_ANNUL,STATE_CANCELED
+        /**
+        if(InsObjects::isBankProduct($this->module)) {
+            # $tbl->AddSearchFields('substate,@PlcUtils::SEDFilter');
+            $tbl->AddSearchFields('docflowstate,substate');
+        }
+        **/
+        # удалять полисы можно только в тест-средах!
+        $canDelete = (SuperAdminMode() && !AppEnv::isProdEnv());
+
+        if(isAjaxCall()) {
+            $tbl->MainProcess(1,0,$canDelete,0);
+            exit;
+        }
+        $pageTitle = AppEnv::getLocalized('mnu_allagr');
+
+        AppEnv::drawPageHeader($pageTitle); # AppEnv::getLocalized
+        /*
+        if($myRights<100) {
+            $agmt_filter = self::allAgrFilter();
+            if (($agmt_filter) && $agmt_filter!=='1') $tbl->addBrowseFilter($agmt_filter);
+        }
+        */
+        $tbl->MainProcess(1,0,$canDelete,0);
+
+        AppEnv::drawPageBottom();
+        if (AppEnv::isStandalone()) exit;
+    }
+    public static function allAgrFilter() {
+        # для Комплаенс или ИБ можно показать только полисы, требующие их внимания
+        return '';
+    }
 } # AppEnv end
 
 define('APPVERSION',"Front-Office v." . APP_VERS. ' ('.APPDATE.')');

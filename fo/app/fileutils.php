@@ -2,15 +2,16 @@
 /**
 * @package ALFO
 * Набор функций для работы с файлами сканов в полисах
-* modified 2025-09-10
-* @version 1.11.002
+* modified 2025-10-20
+* @version 1.11.005
 * sample run: heif-convert -q 80 tmp/test.heic tmp/test-001.jpg
+* imagick : magick input.heic -quality 80% output.jpg
 */
 class FileUtils {
 
     const FOLDER_SCANS = 'agmt_files/'; # в эту папку складываются сканы документов
     static $debug_Uploads = 0;
-    static $logHeic = 1;
+    static $logHeic = 0;
     static $debug = 0;
     static $debugPdf = 0; # выводить опознанные размерности страниц исходника PDF
     static $renameScans = 1; # автоматически переименовывать файлы сканов в соотв. с указанным типом док.
@@ -160,7 +161,7 @@ class FileUtils {
                     if (appEnv::isApiCall()) return ['result'=>'ERROR','message'=>'ИД файла не от того полиса'];
                     continue;
                 }
-                if ($plcdata['stateid']==11) {
+                if ($plcdata['stateid']==11 && empty($plcdata['substate'])) {
                     $ret = 'Договор в статусе Оформлен, удаление файлов недоступно<br>';
                     if (appEnv::isApiCall()) return ['result'=>'ERROR', 'message' => $ret];
                     exit($ret); # Оформленный договор - нельзя ничего удалять
@@ -546,12 +547,17 @@ class FileUtils {
 
     # удаляем из договора файлы сканов, ставшие устаревшими (перерасчет, изменение в данных)
     # $docTypes - список удаляемых типов (или '*' - "удалить всё")
-    public static function deleteFilesInAgreement($module, $plcid, $docTypes) {
+    public static function deleteFilesInAgreement($module, $plcid, $docTypes='*') {
+
         if (empty($module) || empty($plcid) || empty($docTypes)) return FALSE;
         $allTypes = (is_string($docTypes) && $docTypes==='*');
         if (!is_array($docTypes)) $docTypes = explode(',', $docTypes);
         $bkend = appEnv::getPluginBackend($module);
+        if(!is_object($bkend)) return '';
+        if(!method_exists($bkend, 'getLogPref')) return ''; # не страховой модуль!
+
         $log_pref = $bkend->getLogPref();
+
         $ret = 0;
         if ($module === PM::INVEST) {
             $finfo = appEnv::$db->select(investprod::TABLE_DOCSCANS, ['where'=>['insurancepolicyid'=>$plcid], 'orderby'=>'id']);
@@ -1081,18 +1087,38 @@ class FileUtils {
         # if(strtolower($fileExt) !== $ext) return FALSE; # не наш тип
         $newTmpName = $tmpFilename . '.jpg';
         $newFileName = mb_substr($fileName,0,-strlen($ext),MAINCHARSET) . '.jpg';
+        $converter = AppEnv::getConfigValue('convert_heic_prg','heif-convert');
+        $shellRun = in_array($converter, ['heif-convert','imagick']);
+        $exitCode = 'none';
         if(is_writable($tmpFilename)) {
             # вместо исходного $tmpFilename положить сконвертированный файл с таким же именем
-            $shellCmd = "heif-convert -q $quality $tmpFilename $newTmpName";
-            $echoed = $exitCode = '';
-            $result = exec($shellCmd, $echoed, $exitCode);
-            if(self::$logHeic) writeDebugInfo("after call $shellCmd: echoed=",$echoed, "\n  exitcode: $exitCode");
+            if($shellRun) {
+                if($converter==='heif-convert')
+                    $shellCmd = "heif-convert -q $quality $tmpFilename $newTmpName";
+                else {
+                    # $shellCmd = "magick $tmpFilename -quality {$quality}% $newTmpName";
+                    # {upd/2025-09-26} по факту "magick" не работает, надо вызывать "convert"
+                    $shellCmd = "convert $tmpFilename -quality {$quality}% $newTmpName";
+                }
+                $echoed = $exitCode = '';
+                $result = exec($shellCmd, $echoed, $exitCode);
+                if(self::$logHeic) writeDebugInfo("after call [$shellCmd]: exitcode: $exitCode");
+               #  writeDebugInfo("$newTmpName: out Jpg file NOT created, check heif-convert if works!");
+            }
+            else {
+                if(!extension_loaded('imagick'))
+                    throw new Exception("Не установлен PHP модуль imagick! Смените настройку конвертора в ALFO или установите модуль!");
+                $im = new Imagick($tmpFilename);
+                $result = $im->writeImages($newTmpName); # не проверено!
+                $im->destroy();
+            }
+
             if(is_file($newTmpName)) {
                 # @unlink($tmpFilename);
                 if(self::$logHeic) writeDebugInfo("out file created, $newTmpName");
                 return [$newFileName, $newTmpName];
             }
-            writeDebugInfo("$newTmpName: out Jpg file NOT created, check heif-convert if works!");
+            if(self::$logHeic) writeDebugInfo("out JPG file $newTmpName NOT CREATED from $tmpFilename with quality $quality, exit code: $exitCode");
 
             return FALSE;
         }

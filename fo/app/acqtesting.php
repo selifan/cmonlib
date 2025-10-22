@@ -19,6 +19,7 @@ class AcqTesting {
         $jsCode = self::getJs();
         AddHeaderJsCode($jsCode);
         AppEnv::setPageTitle("Тесты эквайринга");
+        $plcDec = rand(1000000,9000000);
         $html = <<< EOHTM
 <center>
 <form id="fm_apitests" onsubmit="return false">
@@ -35,16 +36,17 @@ class AcqTesting {
      <option value="">Выбрать!</option>
      <option value="registerOrder">Создание обычной оплаты</option>
      <option value="registerOrderSBP">Создание СБП оплаты</option>
-     <option value="getOrderStatus">Получить статус ордера</option>
-     <option value="getSbpCode">Получить код ордера для СБП</option>
+     <option value="getOrderStatus">getOrderStatus - Получить статус ордера</option>
+     <option value="cancelOrder">cancelOrder - отзыв пладежа</option>
+     <option value="getSbpCode">getSbpCode - Получить код ордера для СБП</option>
    </select>
    </td>
    <td>Или имя метода<br><input type="text" name="usr_func" id="usr_func" class="ibox w120" /></td>
  </tr>
    <tr>
-       <td class="p-2">номер полиса<br><input type="text" class="ibox w160" name="policyno" id="policyno" value="SOL-010000001" /></td>
-       <td class="p-2">ФИО плательщика<br><input type="text" class="ibox w300" name="fio" id="fio" value="Непотребный Маврикий Закидонович" /></td>
-       <td class="p-2">сумма платежа, р.<br><input type="text" class="ibox w100" name="premium" id="premium" value="5000" /></td>
+       <td class="p-2">номер полиса<br><input type="text" class="ibox w160" name="policyno" id="policyno" value="SOL-00{$plcDec}" /></td>
+       <td class="p-2">ФИО плательщика<br><input type="text" class="ibox w300" name="fio" id="fio" value="Тестовый Макар Проверялкович" /></td>
+       <td class="p-2">сумма платежа, р.<br><input type="text" class="ibox w100" name="premium" id="premium" value="10" /></td>
    </tr>
    <tr class="ordnum" style="_display:none">
      <td class="p-2">Номер ордера<br><input type="text" name="order_id" id="order_id" class="ibox w300" ></td>
@@ -110,13 +112,15 @@ EOJS;
         switch($func) {
             case 'registerOrder':
                 $acqParams['policyno'] = AppEnv::$_p['policyno'];
-                $acqParams['email'] = (empty(AppEnv::$_p['email']) ? 'aleksandr.selifonov@zetains.ru' : AppEnv::$_p['email']);
+                if(empty($acqParams['policyno'])) $acqParams['policyno'] = 'TST-'.rand(1000000,599999999);
+                $acqParams['email'] = (empty(AppEnv::$_p['email']) ? 'aleksandr.selifonov@zettains.ru' : AppEnv::$_p['email']);
                 $acqParams['fullname'] = AppEnv::$_p['fio'] ?? 'Проверочный Макар Сергеевич';
-                $acqParams['premium'] = AppEnv::$_p['premium'] ?? 4800;
+                $acqParams['premium'] = AppEnv::$_p['premium'] ?? 10;
                 $acqParams['url_success'] = AppEnv::$_p['url_success'] ?? 'https://life.zettains.ru/';
                 $acqParams['description'] = AppEnv::$_p['description'] ?? 'Оплата тестового договора '.AppEnv::$_p['policyno'];
                 break;
             case 'getOrderStatus':
+            case 'cancelOrder':
             case 'getSbpCode':
                 $acqParams = AppEnv::$_p['order_id'];
                 break;
@@ -124,7 +128,7 @@ EOJS;
         }
         if(AppEnv::isLocalEnv() && $provider!== 'emulator')
             exit('1' . AjaxResponse::setHtml('results', "$func, params: <pre>" . print_r(AppEnv::$_p,1)
-               .'<br>acqParams:'. print_r($acqParams,1).'</pre>'));
+               .'<br>local, acqParams:'. print_r($acqParams,1).'</pre>'));
 
         $result = self::$acqObject->$func($acqParams);
         writeDebugInfo("Raw calling $func result: ", $result);

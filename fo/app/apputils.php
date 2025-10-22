@@ -4,12 +4,14 @@
 * @author Alexander Selifonov, <Aleksandr.Selifonov@zettains.ru>
 * @name app/apputils.php
 * всякие полезняшки, включая вызовы из API, AJAX
-* @version 0.10.001
-* modified : 2025-09-19, created 2025-09-19
+* @version 0.10.003
+* modified : 2025-10-21, created 2025-09-19
 */
 class AppUtils {
 
     const VERSION = '0.10';
+    private static $debug = 0;
+    private static $debugRemote = 0;
     private static $shortenLongLines = 256; # обрезать длинные строки в текстовых логах при показе
 
     public static function getVersion() { return self::VERSION; }
@@ -20,7 +22,7 @@ class AppUtils {
         return $remoteWrk;
     }
 
-    # вызов данных с удаленного сервера через API вызов
+    # вызов данных с мастер-сервера через API вызов
     public static function makeApiCall($funcName, $arParams) {
         $apiUrl = AppEnv::getConfigValue('mastersrv_url');
         $apiToken = AppEnv::getConfigValue('mastersrv_token');
@@ -44,8 +46,10 @@ class AppUtils {
         $result = curl_exec($ch);
         curl_close($ch);
 
+        if(self::$debug) writeDebugInfo("makeApiCall result : ", $result);
         $ret = json_decode( $result, TRUE );
-        writeDebugInfo("result as array: ", $ret);
+        if(isAjaxCall()) exit($ret['data'] ?? 'No data string');
+
         return $ret;
     }
 
@@ -59,6 +63,10 @@ class AppUtils {
                 $apiResult = self::makeApiCall('getResource', ['function'=>'AppUtils::viewAppLogFile','parameters'=>$logName]);
                 if(isset($apiResult['data'])) $ret = $apiResult['data'];
                 else $ret = $apiResult['message'] ?? 'Ошибка вызова API';
+                if(self::$debugRemote) {
+                    writeDebugInfo("from master server, apiResult: ", $apiResult);
+                    writeDebugInfo("from master server, ret to return: ", $ret);
+                }
             }
             else {
                 $realName = AppEnv::getAppFolder('applogs/') .$logName;
@@ -66,6 +74,7 @@ class AppUtils {
                 else $ret = AjaxResponse::showMessage("Содержимое файла $logName:<hr><pre>" . self::shortenTextFile($realName) . '</pre>');
             }
         }
+
         if(AppEnv::isAPiCall()) {
             return ['result'=>'OK', 'data' => ('1' . $ret)];
         }
@@ -89,9 +98,25 @@ class AppUtils {
     }
 
     # {upd/2025-09-18} полное удаление полиса, с файлами и прочим
+    # $policyid можно передать массив со списком ИЛ (stmt_id) или "*" = "Удалить ВСЕ"
     public static function killAgreement($module, $policyid, $forced = FALSE) {
         if(!SuperAdminMode()) return "Нет прав для полного удаления!";
+        if($policyid === '*') {
+            $idList = AppEnv::$db->select(PM::T_POLICIES, ['fields'=>'stmt_id', 'where'=>['module'=>$module], 'associative'=>0]);
+            if(is_array($idList) && count($idList))
+                $ret = self::killAgreement($module, $idList, $forced);
+            else $ret = "No [$module] policies!";
+
+            return $ret;
+        }
+
+        if(is_array($policyid)) {
+            $ret = '';
+            foreach($policyid as $idItem) $ret .= self::killAgreement($module, $idItem, $forced);
+            return $ret;
+        }
         if($policyid<=0) return "Bad policyid";
+
         if(in_array($module, ['plsign','agentvr','investprod'])) return "В данном модуле удаление не работает";
         $plcData = PlcUtils::loadPolicyData($module, $policyid, FALSE);
 
