@@ -56,7 +56,7 @@ class HeaderHelper {
     static private $_jslibversions = array();
     static $bHeaderDrawn = false;
     static $bFooterDrawn = false;
-    static $_folderJs = '';
+    static $_folderJs = 'js/';
     static $header_jscode = array('head'=>'','onready'=>'','onload'=>'', 'footer'=>''); # javascript code to echo in HEADER block
     static $_jsdefs  = array(); # predefined js libraries list, with dependencies
     static $_usedjs   = array(); # to memorize allready included js libs

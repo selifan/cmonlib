@@ -802,6 +802,7 @@ class PrintFormPdf {
         $flexPage = 0;
         do {
             $arFlexData = $this->_renderFlexTablePage($flexId, $arFlexData,$flexPage);
+            # writeDebugInfo("flextable KT-002, _renderFlexTablePage done, nextPosY=$nextPosY");
             if(!$nextPosY) break;
             if(is_array($arFlexData) && count($arFlexData)) {
                 # writeDebugInfo("page: {$this->prnPage}, this: ", $this);
@@ -812,6 +813,7 @@ class PrintFormPdf {
                 $flexPage++;
             }
         } while (is_array($arFlexData) && count($arFlexData)>0);
+
         if($flexPage > 0) $this->finalizePage();
         return $flexPage;
     }
@@ -967,10 +969,11 @@ class PrintFormPdf {
 
         # Draw data rows
         $bgColOff = 0;
+        $doneRow = 0;
+
         while(count($arFlexData)>0) {
             $data_keys = array_keys($arFlexData);
             $dataRow = $arFlexData[$data_keys[0]];
-            # writeDebugInfo("data row: ", $dataRow);
             $colNo = 0;
             $maxHeight = 0;
             # echo "datarow ... <hr>";
@@ -1009,16 +1012,23 @@ class PrintFormPdf {
                 $this->_pdf->Rect(($startX+$border/2), ($curPosY+$border), ($endX-$startX-$border/2),
                   ($maxHeight+2*$padding - $border/2), 'F', [], array_values($thisRowBg));
             }
+
             # print fields in data row
+            $doneRow++;
+
+            # if(self::$debug>1) writeDebugInfo("arFields to rensder in flexdata: ", $arFields);
             foreach($arFields as $no => $fDef) {
+                $fldid = $fDef['name'];
                 if(!isset($dataRow[$fldid])) {
-                    if(self::$debug) writeDebugInfo("flextable/no [$fldid] in row: ", $dataRow);
+                    if(self::$debug>1) writeDebugInfo("flextable/no [$fldid] in row: ", $dataRow);
                     continue;
                 }
-                if(!is_scalar($dataRow[$fldid]))
+                if(!is_scalar($dataRow[$fldid])) {
+                    if(self::$debug) writeDebugInfo("Non-scalar value for $fldid: ", $dataRow[$fldid]);
+                    # it(__FILE__ .':'.__LINE__."Non-scalar value for $fldid:<pre>" . print_r($dataRow[$fldid],1) . '</pre>');
                     continue;
+                }
                 $fldPosX = $arColumns[$no];
-                $fldid = $fDef['name'];
                 $fsize = $fDef['size'];
                 $ftype = $fDef['type'];
                 if(empty($fsize)) $fsize = $this->_basepar['font']['size'];
@@ -2503,6 +2513,7 @@ class PrintFormPdf {
         $src = empty($fcfg['src']) ? '' : $fcfg['src'];
         if (isset($this->_field_newattr[$fldname]['src']))
             $src = $this->_field_newattr[$fldname]['src'];
+        $src = $this->_evalAttribute($src);
         $rotate = empty($fcfg['rotate']) ? 0 : floatval($fcfg['rotate']);
         $border = empty($fcfg['border']) ? 0 : (floatval($fcfg['border'])? floatval($fcfg['border']) : $fcfg['border']);
         $align  = isset($fcfg['align']) ? $fcfg['align'] : '';

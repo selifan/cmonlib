@@ -3,7 +3,7 @@
 * @name class.dne.php
 * Multi-Level Data Node Exchange (through xml), "DNE" - export full data node to XML and import into DB from XML
 * Node: one row in "primary" table and ALL rows from all "child" tables binded to this primary by foreign key
-* @version 1.02.001 2025-04-15
+* @version 1.03.001 2025-12-05
 * @author Alexander Selifonov
 */
 namespace DNExchange;
@@ -725,14 +725,31 @@ class DNE {
     * @param mixed $tabName table name (or template ID)
     * @return string with JS code ready to insert into HTML
     */
-    public static function getJsCode($tabName) {
+    public static function getJsCode($arArgs) {
+        # $arArgs = func_get_args();
+        writeDebugInfo("getJsCode parasmeters: ", $arArgs);
+        if(is_array($arArgs)) {
+            $tabName = $arArgs[0] ?? '';
+            $finalAction = $arArgs[1] ?? '';
+        }
+        else {
+            $tabName = $arArgs;
+            $finalAction = 'null';
+        }
+        if(empty($finalAction)) $finalAction = 'null';
+
+        writeDebugInfo("real finalAction: [$finalAction]");
         $ret = <<< EOJS
 $(document).ready( function() {
   $.getScript( "js/SimpleAjaxUploader.js" );
 });
 dneLoader = {
   backend: './?p=editref&t=$tabName',
+  finalAction: $finalAction,
   uploader : null,
+  setFinalaction: function(userCallback) {
+    dneLoader.finalAction = userCallback;
+  },
   exportNodeToXML: function(id) {
       window.open("./?p=dneexport&ajax=1&dneaction=export&t=$tabName&id="+id);
   },
@@ -741,10 +758,17 @@ dneLoader = {
     var splt = response.split('|');
     if (splt[0] === '1') {
         asJs.timedNotification(splt[1],4);
-        // window.location.reload();
     }
     else {
         asJs.timedNotification(("Ошибка : "+splt[1]),4);
+    }
+    if(dneLoader.finalAction) {
+      switch( typeof(dneLoader.finalAction)) {
+        case 'string':
+          eval(dneLoader.finalAction); break;
+        case 'function':
+          dneLoader.finalAction; break;
+      }
     }
   },
   initImportDialog: function() {
