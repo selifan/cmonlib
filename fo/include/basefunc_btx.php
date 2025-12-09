@@ -1492,6 +1492,8 @@ function getActiveCharset($defaultset='') {
     return $defaultset;
 }
 function moneyFormat($val, $decpoint='.', $decimals=2) {
+    if(!is_string($decpoint)) $decpoint = '.';
+    if(!is_numeric($decimals)) $decimals = 2;
     return number_format(floatval($val),$decimals,$decpoint,' ');
 }
 function moneyUnformat($val, $thousands=' ', $decpoint=',') {

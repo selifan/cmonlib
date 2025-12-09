@@ -12,6 +12,16 @@ abstract class appPlugins {
     protected $_my_folder = ''; # Must be redefined in real class according to the real class sub-folder in "plugins/"
     protected $backend = NULL; // will be "backend" object
     public $inReports = FALSE; // include objects in global reports
+    # public static $userParams = [];
+    public function __construct() {
+        /*
+        $usrParams = $this->_my_folder . 'user_params.xml';
+        if(is_file($usrParams) && class_exists('ParamDef')) {
+            $pDefLoader = new ParamDef($usrParams);
+            self::$userParams = $pDefLoader->getFields();
+        }
+        */
+    }
     /**
     * Returns TRUE, if user "primary role" is in "_my_roles" plugin list
     * Set your own $_my_roles in every plugin implementation !
@@ -78,7 +88,7 @@ abstract class WebApp {
     static $maintenanceMode = FALSE;
     private static $emailMakeBr = TRUE; # Auto NL2BR when sending HTML emails
     private static $emailConvert = FALSE; # user callback func to check/convert TO email addresses
-
+    static $useDataTables = TRUE; # use astedit.datatables.php ?
     const FOLDER_APP     = 'app/';
     const FOLDER_APPJS   = 'js/';
     const FOLDER_PLUGINS = 'plugins/';
@@ -2107,8 +2117,10 @@ EOJS;
         }
 
         $privs = FALSE;
+        # what astedit module used?
+        if(self::$useDataTables) require_once('astedit.datatables.php');
+        else require_once('astedit.php');
 
-        require_once('astedit.php');
         self::$gridObj = new CTableDefinition($tabid);
         # if (self::$auth->isSuperAdmin()) $privs = array(1,1,1);
         if ($tpriv = self::getRefPrivileges($tabid)) {
@@ -2134,8 +2146,10 @@ EOJS;
         self::$gridObj->setBaseUri("./?p=editref&t=$tabid");
 
         $title = self::$gridObj->desc;
-        $jscode = self::$gridObj->PrintAjaxFunctions(1,1);
-        addHeaderJsCode($jscode);
+        if(!self::$useDataTables) {
+            $jscode = self::$gridObj->PrintAjaxFunctions(1,1);
+            addHeaderJsCode($jscode);
+        }
         self::setPageTitle($title);
         self::drawPageHeader($title);
 
