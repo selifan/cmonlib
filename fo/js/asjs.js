@@ -1,14 +1,14 @@
 /**
  * asjs.js: common javascript function set,
  * Author / collector Alexander Selifonov <alex [at] selifan.ru>
- * @version 1.073.002
- * updated  2024-12-19
+ * @version 1.075.001
+ * updated  2025-12-05
  * License MIT
  **/
 OBSERVE = null;
 OBSERVEname = false;
 asJs = {
-  version: "1.071",
+  version: "1.075",
   defaultDlgClass: 'floatwnd',
   responsecontext: null,
   modalWaitText: '',
@@ -300,11 +300,12 @@ asJs = {
     } else TimeAlert(data, 4, "msg_error");
   }
   ,setSelectByText: function(selid, strvalue, fireEvt) {
-      console.log(selid, " seeking:",strvalue);
+      // console.log(selid, " seeking:",strvalue);
       var tOptions = $(selid + " option");
       var RetCode = false;
+      var lowValue = strvalue.toLowerCase();
       tOptions.each(function() {
-          if($(this).text() === strvalue) {
+          if($(this).text().toLowerCase() === lowValue) {
               $(selid).val(this.value);
               if(fireEvt) {
                   $(selid).change();
@@ -344,11 +345,12 @@ asJs = {
       window.setTimeout('$("#divetimealert").fadeOut()', seconds * 1000);
       return false;
   }
-  ,confirm: function(param, funcYes, funcNo) {
+  ,confirm: function(param, funcYes, funcNo, wndTitle) {
       var msgtxt = '';
+      if(!wndTitle) wndTitle = 'Подтверждение';
       $("div.ui-dialog").remove();
       var opts = {
-        title: 'Подтверждение',
+        title: wndTitle,
         width:'40%',
         maxWidth:800,
         modal: true,
@@ -371,16 +373,17 @@ asJs = {
       }
       var yesLabel = param.yes || 'Да';
       var noLabel = (typeof(param.no)==='undefined') ? 'Нет' : param.no;
-      console.log("dlg options:", opts);
       opts.buttons = {};
-      opts.buttons[yesLabel] = function () {
+      if(funcYes) {
+        opts.buttons[yesLabel] = function () {
           $(this).dialog("close");
           if (funcYes) {
             if (typeof (funcYes) === 'function') funcYes();
             else if (typeof (funcYes) === 'string') eval(funcYes);
           }
           return true;
-      };
+        };
+      }
       if(noLabel) opts.buttons[noLabel] =  function () {
           $(this).dialog("close");
           if (funcNo) {
@@ -530,7 +533,22 @@ asJs = {
       this.tickEvent();
       this.notifyText = '';
     }
+  },
+  isValidEmail: function(emailString) {
+    // const pattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    // regexp исключает нелатинские буквы в email:
+    var pattern = /^[a-z0-9!#$%&'*+\/=?^_`{|}~-]+(?:\.[a-z0-9!#$%&'*+\/=?^_`{|}~-]+)*@(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/i;
+    return pattern.test(emailString);
+  },
+  isValidPhoneNo: function(phoneString) {
+    // проверяет соотв-вие одной из масок: '(999)999-9999' либо '+7(999)999-9999'
+    // const pattern = /(^\(\d{3}\)\d{3}\-\d{4}$)/; // '(999)999-9999'
+    // const pattern7 = /(^\+7{1}\(\d{3}\)\d{3}\-\d{4}$)/; // '+7(999)999-9999'
+    // return (pattern.test(phoneString) || pattern7.test(phoneString));
+    var patterns = /(^\(\d{3}\)\d{3}\-\d{4}$)|(^\+7{1}\(\d{3}\)\d{3}\-\d{4}$)/;
+    return (patterns.test(phoneString));
   }
+
 };
 var as_jsdebug = false;
 //var ajaxbusy = false;
@@ -690,7 +708,10 @@ function NumberRepair(sparam, onlyPos, emptyVal) {
   ret = ret.replace(/[^0-9\.-]/g,'');
   if (isNaN(ret) || ret == '') ret = emptyVal;
   else if (onlyPos && ret < 0) ret = emptyVal;
-  else if(onlyPos > 0) ret = ret.toFixed(onlyPos); // N decimal digits
+  else if(onlyPos > 0) {
+      ret = parseFloat(ret);
+      ret = ret.toFixed(Math.max(onlyPos,2)); // N decimal digits
+  }
 
   if (typeof (this.value) !== 'undefined') {
     this.value = ret;
@@ -1020,8 +1041,8 @@ function activateAjaxSpinner(bmodal) {
   });
 }
 
-function dlgConfirm(param, funcYes, funcNo) {
-  asJs.confirm(param, funcYes, funcNo);
+function dlgConfirm(param, funcYes, funcNo, wnTitle) {
+  asJs.confirm(param, funcYes, funcNo, wnTitle);
 }
 
 // common AJAX call with handling "structured" response
