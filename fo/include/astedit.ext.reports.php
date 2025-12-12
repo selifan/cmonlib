@@ -4,8 +4,8 @@
 * @name include/astedit.ext.reports.php
 * Astedit extension
 * кнопка и генератор отчета по текущей таблице, замена макросу REPORT|...
-* modified 2025-12-09 / created 2025-12-09
-* @version 0.10.001
+* modified 2025-12-12 / created 2025-12-09
+* @version 0.10.003
 */
 namespace astedit;
 class Reports {
@@ -37,12 +37,10 @@ class Reports {
         $tableName = self::$table = $asteditObj->tbrowseid;
         self::$baseUrl = $_SERVER['REQUEST_URI'] ?? $asteditObj->getBaseUri();
         # writeDebugInfo("SERVER ", $_SERVER);
-
         self::$reportid = $params[0] ?? 'report_'.$tableName;
         self::$fields = $params[1] ?? implode(',', $asteditObj->viewfields);
         self::$btnLabel = $params[3] ?? \AppEnv::getLocalized('astedit_report_label','Отчет');
         self::$btnTitle = $params[4] ?? \AppEnv::getLocalized('astedit_report_title','Выгрузить в отчет');
-
         $buttonHtml = self::getButtonHtml($tableName,self::$reportid);
         self::$asteditObj->addToolbarElement($buttonHtml);
         # кнопа выгрузки как customColumn:
@@ -92,26 +90,32 @@ EOJS;
             else include_once('astedit.php');
         }
         */
-        # include_once ('astedit.php');
+        # writeDebugInfo("params: ", \Appenv::$_p);
+        # writeDebugInfo("text ", debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 3));
         $tablename = \AppEnv::$_p['table'] ?? self::$table;
         $reportid = \AppEnv::$_p['reportid'] ?? self::$reportid;
         if(empty($tablename) || empty($reportid)) throw new Exception(__FILE__ . ':'. __LINE__ . " - Empty tanle or report name!");
 
 
         $repFields = self::$fields;
+        # writeDebugInfo("KT-001 fields:", $repFields);
         $repWhere = self::$filter;
         if(is_object(self::$asteditObj)) { $tbl = self::$asteditObj; writeDebugInfo("use old"); }
         else {
             $tbl = new \CTableDefinition($tablename);
         }
-
         $viewFilter = $tbl->PrepareFilter();
         if($repWhere && $viewFilter) $repWhere = "$repWhere AND $viewFilter";
         elseif(!empty($viewFilter)) $repWhere = $viewFilter;
 
-        if($repFields ==='') $repFields = $tbl->viewfields; # вывести поля, показываемые в гриде
-        elseif($repFields==='*') $repFields = array_keys($tbl->fields); # вывести ВСЕ поля
+        $params = \astedit::$extensionParams["reports-$tablename-$reportid"] ?? [];
+        $repFields = $params[1] ?? $tbl->viewfields;
+
+        if($repFields==='*') $repFields = array_keys($tbl->viewfields); # вывести ВСЕ поля
+        elseif($repFields=='*') $repFields = array_keys($tbl->viewfields); # вывести ВСЕ поля
         else $repFields = preg_split('/[;, ]/', $repFields,-1,PREG_SPLIT_NO_EMPTY); # строка со списком через зпт
+
+        # exit(__FILE__ .':'.__LINE__.' data:<pre>' . print_r($repFields,1) . '</pre>');
 
         $repQuery = "SELECT " . implode(',',$repFields) . ' FROM ' . $tablename;
         if(!empty($repWhere)) $repQuery .= " WHERE ". $repWhere;
