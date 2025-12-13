@@ -2,12 +2,15 @@
 /**
 * @package ALFO
 * @name libs/agentutils.php
-* @version 1.01.001 created: 2021-12-09
+* @version 1.02.002 created: 2021-12-09
 * Утилиты работы с данными агентов/коучей/кураторов, проверки прав ПП агентов/банков
-* modified 2023-10-08
+* modified 2025-11-27
 */
 namespace Libs;
 class AgentUtils {
+    static $debug = 0;
+    static $debugUserId = -1; # 6750 - Ховрачева  8614 - Зверев
+    static $agtListAddFromManagerId = 1; # в список агентов для менеджера добавить еще все учетки, у которых нужный manager_id
     /**
     * Готовлю блок данных для вывода в "подвале" печатных форм - данные об агенте, оформившем полис
     * @param mixed $dta массив исходных данных, в него же и заносить!
@@ -229,5 +232,124 @@ class AgentUtils {
           'associative'=>0
         ]);
         return $sRet;
+    }
+    /**
+    * Получить список всех УЗ, входящих подразделение и его дочки
+    *
+    * @param mixed $deptid ИД подразделения
+    * @param mixed $rolename идентификатор роли, которая должна быть у агента
+    * @param mixed $skipMe TRUE если себя в список включать не надо
+    * @param mixed $onlyActive TRUE только действующие учетки (пока не реализовано!)
+    * @param mixed $keyVal TRUE вернуть в виде [ID => 'Fullname',...] , иначе - [ [ID, Fullname],... ]
+    * @param mixed $mgrId ИД менеджера, если еще надо отобрать учетки с таким manager_id
+    */
+    public static function getAllUsersInDept($deptid=0,$rolename='', $skipMe = FALSE, $onlyActive=FALSE, $keyVal=TRUE, $mgrId=FALSE) {
+        global $clcabDB, $bitrixDB;
+        if (empty($bitrixDB)) $bitrixDB = (defined('BITRIX_DB') ? constant('BITRIX_DB') : 'cc20prd');
+        if(!$deptid) {
+            $deptid = \AppEnv::getUserDept();
+        }
+        $deptList = \OrgUnits::getDeptsTree($deptid,'',TRUE,TRUE);
+        $myid = \AppEnv::getUserId();
+        $exCond = $skipMe ? "AND u.userid<>'$myid'" : '';
+        $strDepts = implode(',' ,$deptList);
+        $roleid = ($rolename ? \AppEnv::$db->select('arjagent_acl_roles',[ 'fields'=>'roleid', 'where'=>['rolename'=>$rolename],'singlerow'=>2,'associative'=>0]) : 0);
+        $fldList = 'u.userid,u.fullname';
+        $tblList = ['u'=>\PM::T_USERS];
+        $where = "(u.deptid IN($strDepts)" . (($mgrId>0) ? " OR (manager_id=$mgrId)" : '') . ')';
+
+        if($skipMe) $where .= " AND u.userid<>'$myid'";
+
+        if($roleid) {
+            $tblList['ro'] = 'arjagent_acl_userroles';
+            $where .= " AND ro.userid=u.userid AND ro.roleid=$roleid";
+        }
+
+        if($onlyActive) { # надо еще прицепить поле с признаком активности!
+            if(constant('IN_BITRIX')) { # выясняю активность УЗ по b_user.ACTIVE в битрикс
+                $tblList['bu'] = "$bitrixDB.b_user";
+                $where .= " AND (bu.ID=u.bitrix_id) AND (bu.ACTIVE='Y')";
+            }
+            else { # по полю b_blocked
+                $where .= " AND (b_blocked<>1)";
+            }
+        }
+
+        $accounts = \AppEnv::$db->select($tblList,
+          [ 'distinct'=>1,
+            'fields'=>$fldList,
+            'where'=>$where,
+            'orderby'=>'u.fullname',
+            'associative'=>0,
+          ]);
+        # writeDebugInfo("SQL for users in depts, mgrId=[$mgrId]: ", \AppEnv::$db->getLastQuery(), "\n    err: ", \AppEnv::$db->sql_error());
+        if($keyVal) {
+            $arRet = [];
+            foreach($accounts as $row) { $arRet[$row[0]] = $row[1]; }
+            return $arRet;
+        }
+        return $accounts;
+    }
+    /**
+    * {upd/2025-11-20} Если текущий пользователь - менеджер в данном модуле $module,
+    * вернет список агентов, от имени которых может оформлять полисы в данном модуле
+    * @param mixed $module
+    * @param mixed $right_oper имя роли ЛИБО "*" если надо вернуть всех агентов непзависимо от наличия роли
+    */
+    public static function amIManagerWithAgents($module, $onlyActive=TRUE, $right_oper='', $forUser=FALSE) {
+        if($forUser>0) {
+            $userid = $forUser;
+            $userDept = \AppEnv::$db->select(\PM::T_USERS,['fields'=>'deptid',
+              'where'=>['userid'=>$userid],'singlerow'=>1, 'associative'=>0]);
+        }
+        else {
+            $userid = \AppEnv::getUserId();
+            $userDept = \AppEnv::getUserDept();
+        }
+        if(empty($userDept)) return NULL;
+        if($userid == self::$debugUserId) self::$debug = 1;
+        if(self::$debug) writeDebugInfo("seek for user $userid/ dept $userDept");
+        $mgrRightName = \AppEnv::$_plugins[$module]->ROLE_MANAGER ?? $module.'_manager';
+        if(self::$debug) writeDebugInfo("module: [$module], check right id: ", $mgrRightName);
+        if(!isset(\AppEnv::$_plugins[$module])) return NULL;
+        if($right_oper === '*') $operRightName = ''; # хочу ВСЕХ агентов без учета наличия роли
+        else $operRightName = empty($right_oper) ? (\AppEnv::$_plugins[$module]::ROLE_OPER ?? $module.'_oper') : $right_oper;
+        $mgrId = FALSE;
+        if(self::$agtListAddFromManagerId) {
+            $myFio = \AppEnv::$db->select(['u'=>\PM::T_USERS],['where'=>['userid'=>$userid],
+              'fields'=>'fullname', 'singlerow'=>1, 'associative' => 0
+            ]);
+
+            if(!empty($myFio)) {
+                $mgrId = \AppEnv::$db->select(\PM::T_CURATORS, ['fields'=>'id', 'where'=>['fullname'=>$myFio],
+                  'singlerow'=>1, 'associative'=>0]);
+            }
+        }
+
+        $arRet = self::getAllUsersInDept($userDept,$operRightName, TRUE, $onlyActive, TRUE, $mgrId);
+        if(self::$debug) writeDebugInfo("$module/агенты($right_oper/$operRightName): ", $arRet);
+        if(is_array($arRet) && count($arRet)) return $arRet;
+        return 0;
+    }
+    # вернет список УЗ у которых в manager_id сидит ИД меня как куратора (поиск "меня" в таблице кураторов - по ФИО!)
+    public static function getMyAgentAsCurator($userid=0) {
+        if(!$userid) $userid = \AppEnv::getUserId();
+        $myFio = \AppEnv::$db->select(['u'=>\PM::T_USERS],['where'=>['userid'=>$userid],
+          'fields'=>'fullname', 'singlerow'=>1, 'associative' => 0
+        ]);
+        # $myFio = 'Ховрачева Анна Павловна'; # debug!
+        $myagents = \AppEnv::$db->select(['u' => \PM::T_USERS],
+          ['fields'=>'u.userid,u.fullname',
+           'where'=>"u.manager_id IN (select id FROM ". \PM::T_CURATORS . " WHERE fullname='$myFio')",
+           'orderby'=>'u.fullname']);
+        # writeDebugInfo("SQL: ", \AppEnv::$db->getLastQuery(), ' ERR:', \AppEnv::$db->sql_error() );
+        if(is_array($myagents) && count($myagents)) {
+            $arRet = [];
+            foreach($myagents as $row) {
+                $arRet[$row['userid']] = $row['fullname'];
+            }
+            return $arRet;
+        }
+        return FALSE;
     }
 }
