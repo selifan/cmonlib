@@ -111,19 +111,25 @@ EOJS;
         $params = \astedit::$extensionParams["reports-$tablename-$reportid"] ?? [];
         $repFields = $params[1] ?? $tbl->viewfields;
 
-        if($repFields==='*') $repFields = array_keys($tbl->viewfields); # вывести ВСЕ поля
-        elseif($repFields=='*') $repFields = array_keys($tbl->viewfields); # вывести ВСЕ поля
+        if($repFields==='*') {
+
+            $columns = \Astedit::$db->sql_query("describe $tbl->id",TRUE, TRUE, TRUE);
+            $repFields = array_column($columns, 'Field');
+            # exit(__FILE__ .':'.__LINE__.' data:<pre>' . print_r($cols,1) . '</pre>');
+        }
+        elseif($repFields==='') $repFields = $tbl->viewfields; # вывести ВСЕ поля, выводимые на грид
         else $repFields = preg_split('/[;, ]/', $repFields,-1,PREG_SPLIT_NO_EMPTY); # строка со списком через зпт
 
-        # exit(__FILE__ .':'.__LINE__.' data:<pre>' . print_r($repFields,1) . '</pre>');
+        $strFields = implode(',',$repFields);
 
-        $repQuery = "SELECT " . implode(',',$repFields) . ' FROM ' . $tablename;
+        $repQuery = "SELECT $strFields FROM $tablename";
         if(!empty($repWhere)) $repQuery .= " WHERE ". $repWhere;
 
         if($orderBy = $tbl->prepareOrder()) {
             $repQuery .= " ORDER BY " . $orderBy;
         }
-        # exit($repQuery); # debug
+        # exit(__FILE__ .':'.__LINE__.' query:<pre>' . print_r($repQuery,1) .print_r($repFields,1) . '</pre>');
+
         # Делаю готовый конфиг для FlexReport
         $cfg = [
           'headings' => [

@@ -4,8 +4,8 @@
  * @name astedit.datatables.php - grid render using datatables.js https://datatables.net/
  * used bootstrap icons, jQuery, asjs.js
  * @author Alexander Selifonov, < alex [at] selifan dot ru >
- * @Version 1.0.005 based on astedit 1.88.001
- * updated 2025-12-12 created 2025-11-27
+ * @Version 1.0.007 based on astedit 1.88.001
+ * updated 2025-12-18 created 2025-11-27
  **/
 # User field types, added by including your own classes
 interface UserFieldType
@@ -422,6 +422,7 @@ EOJS;
         switch (strtoupper($charset)) {
             case "UTF8":
                 $charset .= " COLLATE utf8_unicode_ci ";
+                # TODO: MySQL 8 deprecates UTF8, preferring UTF8MB4
                 break;
             case "CP1251":
                 $charset .= " COLLATE cp1251_general_ci ";
@@ -432,6 +433,7 @@ EOJS;
     public static function ast_trim($par)
     {
         if (MAINCHARSET == "UTF-8") {
+            if(is_callable('RusUtils::mb_trim')) return \RusUtils::mb_trim($par);
             try {
                 $ret = @preg_replace('@^\s*|\s*$@u', "", $par); # Sometimes causes FATAL errors !
             } catch (Exception $e) {
@@ -444,13 +446,12 @@ EOJS;
         return $ret;
     }
     # set user function to check if login exists
-    public static function SetLoginCheckFunc($func)
-    {
+    public static function SetLoginCheckFunc($func){
         self::$checkLoginFunc = $func;
     }
 
     # returns first N (40) chars of passed string with "..." if cutted. To replace global func brShortText
-    public static function viewShortText($txt, $maxlen = 40)
+    public static function viewShortText($txt, $arRow=[], $maxlen = 40)
     {
         if (empty($txt)) {
             return "";
@@ -470,8 +471,8 @@ EOJS;
         if (substr($cset, 0, 3) === "UTF") {
             $ret =
                 $cutoff < mb_strlen($txt, $cset)
-                    ? mb_substr($txt, 0, $cutoff, $cset) . "..."
-                    : $txt;
+                  ? mb_substr($txt, 0, $cutoff, $cset) . "..."
+                  : $txt;
             return $ret;
         }
         return $cutoff < strlen($txt) ? substr($txt, 0, $cutoff) . "..." : $txt;
@@ -526,7 +527,7 @@ EOJS;
         switch (strtolower($charset)) {
             case "utf-8":
             case "utf8":
-                return $newMySQL ? "UTF8MB3" : "UTF8";
+                return $newMySQL ? "UTF8MB4" : "UTF8";
             case "windows-1251":
                 return "CP1251";
         }
@@ -544,7 +545,7 @@ EOJS;
         $sRet = "";
         if (isset(AsteditLocalization::$strings["sql_error_" . $errno])) {
             $sRet = AsteditLocalization::$strings["sql_error_" . $errno];
-        } elseif (is_callable("AppEnv::getLocalised")) {
+        } elseif (is_callable("AppEnv::getLocalized")) {
             $sRet = AppEnv::getLocalized("sql_error_" . $errno);
         }
         if (empty($sRet)) {
@@ -4961,73 +4962,8 @@ EOJS;
                 }
                 break;
 
-            case "doedit": # update record with edited values
-                if ($this->_frozen) {
-                    $res_text .= $ast_tips["table_frozen"];
-                    $this->errUpdate = true;
-                } else {
-                    #<3>
-                    $res_text = $this->UpdateDataIntoTable($ast_act);
-                    if ($sqlErr = Astedit::$db->sql_error()) {
-                        $res_text = $sqlErr;
-                        $this->errUpdate = true;
-                    } else {
-                        if (
-                            !empty($this->afterupdate) &&
-                            is_callable($this->afterupdate)
-                        ) {
-                            call_user_func(
-                                $this->afterupdate,
-                                "update",
-                                $id,
-                                Astedit::$db->sql_errno()
-                            );
-                        }
-                    }
-                } #<3>
-                if ($this->errUpdate) {
-                    exit($res_text);
-                } else {
-                    exit("1");
-                }
-
-                break;
-
-            case "doadd": # add a record
-                if ($this->_frozen) {
-                    $res_text .= $ast_tips["table_frozen"];
-                    $this->errUpdate = true;
-                } else {
-                    #<3>
-                    $res_text = $this->UpdateDataIntoTable($ast_act);
-                    if ($sqlErr = Astedit::$db->sql_error()) {
-                        $res_text = $sqlErr;
-                        $this->errUpdate = true;
-                    }
-                    if (
-                        !empty($this->afterupdate) &&
-                        is_callable($this->afterupdate)
-                    ) {
-                        $id = Astedit::getInsertedId($this->id);
-                        call_user_func(
-                            $this->afterupdate,
-                            "add",
-                            $id,
-                            Astedit::$db->sql_errno()
-                        );
-                    }
-                } #<3>
-                # $res_text = $result? "Обновление выполнено" : "Ошибка при выполнении оператора:<br>$uqry<br>".mysql_error();
-                if ($this->errUpdate) {
-                    exit($res_text);
-                } else {
-                    exit("1");
-                }
-                break;
-
             case "viewrecord": # ajax request for the record
-                echo "debug return";
-                exit();
+                # echo "debug return"; exit();
                 $this->PerformViewRecord();
                 break;
 
@@ -5246,6 +5182,11 @@ EOJS;
                     0,
                     $ast_parm
                 );
+                if ( !empty($this->afterupdate) && is_callable($this->afterupdate) ) {
+                    $id = ($ast_act === 'doadd') ? Astedit::getInsertedId($this->id) : 0;
+                    call_user_func( $this->afterupdate,$ast_act,$id, Astedit::$db->sql_errno() );
+                }
+
                 if ($this->errUpdate) {
                     exit("1" . AjaxResponse::showError($resultText));
                 } else {
@@ -5282,12 +5223,7 @@ EOJS;
                         }
                         $resultText = empty($result) ? "" : $result; # $ast_tips['rec_deleted']
                         if (empty($res_text) && $this->_auditing) {
-                            @call_user_func(
-                                $this->_auditing,
-                                $this->id,
-                                $ast_act,
-                                $id
-                            );
+                            @call_user_func($this->_auditing,$this->id,$ast_act,$id);
                         }
                     } else {
                         $resultText = $this->DeleteRecord($ast_parm);
@@ -5638,40 +5574,25 @@ EOJS;
                 @call_user_func($this->_auditing, $this->id, "delete", $id);
             }
             if (!empty($this->afterupdate) && is_callable($this->afterupdate)) {
-                @call_user_func(
-                    $this->afterupdate,
-                    "delete",
-                    $id,
-                    Astedit::$db->sql_errno()
-                );
+                @call_user_func($this->afterupdate,"delete",$id,Astedit::$db->sql_errno());
             }
         }
 
         if (!empty($ast_parm["ast_ajaxmode"]) or isAjaxCall()) {
-            $this->SendAjaxResponse($ret);
+            exit($ret);
         }
         return $ret;
     } # <DeleteRecord>
     function PerformViewRecord($parms)
     {
         if (function_exists("AstGenerateView")) {
-            AstGenerateView();
+            AstGenerateView($this->id, $parms);
         } else {
             echo "no AstGenerateView function for {$this->id}";
         }
         exit();
     }
-    function SendAjaxResponse($msg)
-    {
-        $msg = EncodeResponseData($msg);
-        echo $msg;
-        exit();
-    }
 
-    function CreateTableNow()
-    {
-        return $this->CreateTable(true);
-    }
     function SetBrowseId($strk)
     {
         $this->tbrowseid = $strk;
