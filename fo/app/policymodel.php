@@ -4,8 +4,8 @@
 * @author Alexander Selifonov,
 * @name app/policymodel.php Базовый класс для работы с данными по договору/полису
 * (создание, просмотр, редактир-е,печать, валидация, сохранение, загрузка данных)
-* @version 1.129.002 / EDO-unipep / investanketa / unified_pdn
-* modified : 2025-10-22
+* @version 1.132.004 / EDO-unipep / investanketa / unified_pdn
+* modified : 2025-12-11
 */
 if (!defined('PLC_SAVE_CHECKLOG'))
     define('PLC_SAVE_CHECKLOG', FALSE); # сохранять ли результат проверки по спискам в полис, как html файл
@@ -18,6 +18,7 @@ class PolicyModel {
     const BACKEND = 'backend.php';
     const COMPRESS_PDF = TRUE; # {upd/2023-04-24} Включение режима компрессии генерируемых PDF (заявление, полис)
     static $logErrors = FALSE;
+    const ZIPCODE6 = FALSE; # накладывать маску 6 цифр на почтовые коды ?
     const PENSIA_MALE   = 65; # пенсионный возраст - муж
     const PENSIA_FEMALE = 60; # пенсионный возраст - жен
     public static $AGE_CHILD = 18; # возраст окончания статуса "ребенок"
@@ -34,8 +35,10 @@ class PolicyModel {
     public $_deptReq = []; # Общие реквизиты настройки головного ОУ
     protected $iAmAdmin = FALSE; # удалить, больше не нужна
     static $super_rights = array('bank:superoper','agmt_superoper');
+    static $copyPastePersons = TRUE; # вкл.поддержку CTRL-C / CTRL-V из страхователя в блок ВП
     # static $pmcached = [];
     static $earlyInvestAnketa = FALSE; # выводить кнопки ввода инвест-анкеты на раннем этапе - ввод нового договора
+    static $anketa_signer_image = ''; # Сюда подгрузится путь к картинке факсимиле подписанта на анкетах клиентв/ВП
     public static $_instance = [];
 
     protected $printdata = NULL;
@@ -396,6 +399,8 @@ class PolicyModel {
      ,'11' => 'Оформлен'
      ,'12' => 'Не согласовано андеррайтером'
      ,'30' => 'На проверке у Комплайнс'
+     ,'33' => 'На проверке у ИБ'
+     ,'63' => 'На проверке у Комплайнс и ИБ'
      ,'50' => 'Расторгнут'
      ,'51' => 'Расторгнут с выкупной'
      ,'60' => 'Блокирован'
@@ -425,7 +430,7 @@ class PolicyModel {
         $dta = isset($calc['equalinsured']) ? $calc : $this->_rawAgmtData;
         $insured = Persons::getPersonData($dta['stmt_id'],'insd');
         $ret = FALSE;
-        if(!isset($insured['id']))
+        if( !isset($insured['id']) && isset($dta['stmt_id']) )
             $insured = Persons::getPersonData($dta['stmt_id'],'child');
         if(!empty($insured['birth'])) {
             $insdAge = \RusUtils::yearsBetween($insured['birth'], $dta['datefrom']);
@@ -587,7 +592,7 @@ class PolicyModel {
 
             # если договор явл. пролонгацией, ищем исходный, для полей previous_*
             if (!empty($dta['previous_id'])) {
-                $prevdta = DataFind::getPolicyData($dta['previous_id']);
+                $prevdta = DataFind::getPolicyData($dta['previous_id'],FALSE, $this->module);
                 if (isset($prevdta['policyno'])) {
                     $dta['previous_policyno'] = $prevdta['policyno'];
                     $dta['previous_datefrom'] = isset($prevdta['datefrom']) ? to_char($prevdta['datefrom']) : '';
@@ -713,6 +718,9 @@ class PolicyModel {
         if (method_exists($this, 'anketaOptions')) $ankOpts = $this->anketaOptions();
         else $ankOpts = FALSE;
         $doAnketa = $this->print_anketa;
+
+        $metaType = $dta['metatype'] ?? $this->_rawAgmtData['metatype'] ?? '';
+        AnketaPrint::loadSignerData($dta, $metaType);
 
         $premTotal = $dta['premtotal'] ?? $this->getTotalPremium($dta,TRUE);
         if(floatval($premTotal) <= floatval($dta['policy_prem']) && $dta['rassrochka']>0) {
@@ -1028,7 +1036,7 @@ class PolicyModel {
         if (!empty($dta['previous_id'])) {
 
             if (is_numeric($dta['previous_id'])) {
-                $prevdta = DataFind::getPolicyData($dta['previous_id']);
+                $prevdta = DataFind::getPolicyData($dta['previous_id'], FALSE, ($this->module ?? $dta['module']));
                 if (isset($prevdta['policyno'])) {
                     $dta['previous_policyno'] = $prevdta['policyno'];
                 }
@@ -1049,17 +1057,25 @@ class PolicyModel {
             if($this->_rawAgmtData['med_declar'] === 'Y') $dta['med_declar_yes'] = 1;
             elseif($this->_rawAgmtData['med_declar'] === 'N') $dta['med_declar_no'] = 1;
         }
+        $allReasons = $dta['calc_uwreasons'] ?? $dta['all_uwreasons'] ?? $dta['reasonid'];
+        if(is_string($allReasons)) $allReasons = explode(',', $allReasons);
+        if(!in_array($dta['reasonid'], $allReasons)) $allReasons[] = $dta['reasonid'];
         # Если поле соотв.мед-декларации не заполнено, включаю вывод ЧЕРНОВИК
-        if($dta['stateid']<PM::STATE_UNDERWRITING && !in_array($dta['reasonid'], PM::$noDeclarReasons)
-          && empty($dta['med_declar_yes']) && empty($dta['med_declar_no']) && ($metaTp != \OrgUnits::MT_BANK)) {
+        # {upd/2025-12-04} если хоть один из кодов UW в списке $noDeclarReasons - слово ЧЕРНОВИК не вывожу
+        # (на UW надо подавать заявл-е подписанное клиентом, т.е. не черновик!)
+        $intercept = array_intersect($allReasons, array_merge(PM::$noDeclarReasons, PM::$calcReasons));
+        $dta['blocking_reasons'] = $intercept;
+        if($dta['stateid']<PM::STATE_UNDERWRITING && count($intercept)==0
+          && empty($dta['med_declar'])  && ($metaTp != \OrgUnits::MT_BANK)) {
             $dta['demofld'] = 'ЧЕРНОВИК';
         }
+
         if(!empty($dta['insdfam']))
             $dta['insdphones'] = PlcUtils::buildAllPhones('insd', $dta, TRUE);
         if(!empty($dta['childfam']))
             $dta['childphones'] = PlcUtils::buildAllPhones('child', $dta, TRUE);
 
-        # exit(__FILE__ .':'.__LINE__.' prepareForPrintStmt data:<pre>' . print_r($dta,1) . '</pre>');
+        # exit(__FILE__ .':'.__LINE__.' prepareForPrintStmt data:<pre>' . print_r($dta,1) . '<br>all_resons: '.print_r($allReasons,1). '</pre>');
     }
 
     public static final function getInstance($classname) {
@@ -1198,12 +1214,12 @@ class PolicyModel {
     }
     public function isAdmin() {
         if ($this->getUserLevel()>=5) return TRUE; # начиная с андеррайтера - админ!
-        return (AppEnv::$auth->getAccessLevel([$this->privid_super, PM::RIGHT_SUPEROPER, CAuthCorp::AUTH_RIGHT_SUPEADMIN]));
+        return (AppEnv::$auth->getAccessLevel([$this->privid_super, PM::RIGHT_SUPEROPER, PM::RIGHT_SUPERADMIN]));
     }
     public function isICOfficer($exact=FALSE) { # сотрудник стр.компании и выше
         if($exact) return ($this->getUserLevel()==PM::LEVEL_IC_ADMIN);
         if ($this->getUserLevel()>=PM::LEVEL_IC_ADMIN) return TRUE;
-        return (AppEnv::$auth->getAccessLevel([$this->privid_super, PM::RIGHT_SUPEROPER, CAuthCorp::AUTH_RIGHT_SUPEADMIN]));
+        return (AppEnv::$auth->getAccessLevel([$this->privid_super, PM::RIGHT_SUPEROPER, PM::RIGHT_SUPERADMIN]));
     }
 
     # Сотрудник стр.компании?
@@ -1418,9 +1434,79 @@ class PolicyModel {
         $plg = $this->module;
         if (!$plg) $plg = AppEnv::currentPlugin();
 
-        include_once('astedit.php');
+        # include_once('astedit.php');
+        if(WebApp::$useDataTables) include_once('astedit.datatables.php');
+        else include_once('astedit.php');
+
         $tbl = new CTableDefinition(PM::T_POLICIES);
         $tbl->setBaseUri("./?plg=$plg&action=agrlist");
+
+        # {upd/2024-03-13} фильтры по номеру полиса в одном продукте не будут влиять на просмотр другого
+        $tbl->setFilterPrefix($plg);
+        $agmt_filter = $this->agmtDeptFilter();
+        if (self::$debug) WriteDebugInfo($this->module . '/policy view filter: ',$agmt_filter);
+        if (($agmt_filter) && $agmt_filter!=='1') $tbl->addBrowseFilter($agmt_filter);
+
+        $super = SuperAdminMode(); # супер-админ может удалять полисы
+
+        if (method_exists($this, 'agrListFields')) $fldlist = $this->agrListFields();
+        else {
+            $fldlist = 'policyno';
+            /*
+            if ($super || AppEnv::$auth->getAccessLevel($this->privid_super)) {
+              if (WebApp::$IFACE_WIDTH ==0 || WebApp::$IFACE_WIDTH > 800) $fldlist .= ',deptid';
+            }
+            */
+            if (WebApp::$IFACE_WIDTH >0 && WebApp::$IFACE_WIDTH < 800) # short field list
+              $fldlist .= ',datefrom,datetill,term,policy_prem,currency,created';
+            else
+              $fldlist .= ',insurer_fullname,datefrom,datetill,term,policy_prem,currency,created';
+
+            # $fldlist   .= ($this->b_stmt_exist ? ',stmt_stateid' : '') . ',stateid';
+            $fldlist   .= ',stateid,statedate';
+        }
+
+        $tbl->SetView($fldlist);
+        $tbl->addBrowseFilter("module='$plg'");
+        # {upd/2023-11-01} юзер может отключить вывод аннулировыанных
+        $hideCanceled = UserParams::getSpecParamValue(0,PM::USER_CONFIG,'show_canceled');
+        if($hideCanceled === 'hide') $tbl->addBrowseFilter("stateid NOT IN(9,10)"); # PM::STATE_ANNUL,STATE_CANCELED
+        /**
+        if(InsObjects::isBankProduct($this->module)) {
+            # $tbl->AddSearchFields('substate,@PlcUtils::SEDFilter');
+            $tbl->AddSearchFields('docflowstate,substate');
+        }
+        **/
+        # удалять полисы можно только в тест-средах!
+        $canDelete = ($super && !AppEnv::isProdEnv());
+
+        if(isAjaxCall()) {
+            $tbl->MainProcess(1,0,$canDelete,0);
+            exit;
+        }
+        if (method_exists(AppEnv::$_plugins[$this->module], 'getVisibleProductName')) {
+            $visibleName = $plg::getVisibleProductName();
+            $pageTitle = AppEnv::getLocalized('title_agrlist') . ' '. $visibleName;
+        }
+        else $pageTitle = AppEnv::getLocalized($plg.':agrlist');
+
+        AppEnv::drawPageHeader($pageTitle); # AppEnv::getLocalized
+
+        $tbl->MainProcess(1,0,$canDelete,0);
+
+        AppEnv::drawPageBottom();
+        if (AppEnv::isStandalone()) exit;
+    }
+    public function agrlist_dt() {
+
+        $plg = $this->module;
+        if (!$plg) $plg = AppEnv::currentPlugin();
+
+        if(WebApp::$useDataTables) include_once('astedit.datatables.php');
+        else include_once('astedit.php');
+
+        $tbl = new CTableDefinition(PM::T_POLICIES);
+        $tbl->setBaseUri("./?plg=$plg&action=agrlist_dt");
 
         # {upd/2024-03-13} фильтры по номеру полиса в одном продукте не будут влиять на просмотр другого
         $tbl->setFilterPrefix($plg);
@@ -1801,10 +1887,11 @@ class PolicyModel {
             if (method_exists($this, 'decodeSubProgram')) {
                 $dta['programname'] = $this->decodeSubProgram($this->calc);
             }
-            else {
-                $dta['programname'] = $this->getProgramName($dta['programid'], $dta);
-                # writeDebugInfo("$dta[programid] -> ", $dta['programname']);
+            elseif(method_exists(AppEnv::$_plugins[$this->module], 'getFullProgramName')) {
+                $dta['programname'] = AppEnv::$_plugins[$this->module]->getFullProgramName($dta['programid'], $dta);
             }
+            else $dta['programname'] = $this->getProgramName($dta['programid'], $dta);
+
 
             if ( PM::VIEW_BENEF && empty($dta['no_benef'])) {
                 $dta['benef'] = $this->loadBeneficiaries($id,'benef',0,1); # осн.выгодоприобр.
@@ -2486,6 +2573,8 @@ EOJS;
                 HeaderHelper::addJsCode(DadataUtl::getJsCode());
             }
             $jscode .= '$("input.docpodr").mask("999-999");';
+            if(self::ZIPCODE6) $jscode .= '$("input.zipcode").mask("999999");'; # почтовые индексы 6 цифр
+
         }
 
         if (!$iamUw && $this->uw_after_edit && $id>0) {
@@ -2505,6 +2594,8 @@ EOJS;
 
         # @since 1.45 - свой js код для ред-я в stmt()
         if (method_exists($this, 'stmtJsCodeReady')) $jscode .= $this->stmtJsCodeReady($id);
+        # {upd/2025-10-30 - ф-ционал CTRL-C / CTRL-V для копирования Страхователя/Застрах, в Выг-Приобр.
+        if(self::$copyPastePersons) $jscode .= '$("input.cp_name").on("keyup", policyModel.nameKeyUp);';
 
         if ($getSeller) {
            # цепляю к полю авто-заполнение (autocomplete)
@@ -2640,7 +2731,6 @@ EOHTM;
 
         if ($ouparamSet != '') {
             # {upd/2021-05-04} добавляю на форму ввода поля под "спец-параметры" для партнера
-            include_once('class.paramdef.php');
             $xmlOuSet = OrgUnits::getOuParamSetFile($ouparamSet);
             $ouDef = new \ParamDef($xmlOuSet);
             $paramSubForm = $ouDef->htmlForm();
@@ -2767,6 +2857,11 @@ EOHTM;
         $pageTitle = '';
         if ( $findid ) {
             $this->loadPolicy($findid,'edit');
+
+            # фиксирую подразд-е, в котором создан полис, для дальнейших зависящих вызовов
+            if(!empty($this->_rawAgmtData['deptid'])) {
+                PlcUtils::setPolicyDept($this->_rawAgmtData['deptid']);
+            }
             if (!empty($this->_rawAgmtData['policyno'])) {
                 $splCodes = explode('-', $this->_rawAgmtData['headdeptid']);
                 $codirovka = $splCodes[0];
@@ -2838,7 +2933,7 @@ EOHTM;
         }
 
         $this->_deptReq = OrgUnits::getOuRequizites($headDept, $this->module);
-        $programid = AppEnv::$_p['programid'] ?? 0; # $this->_rawAgmtData['programid'] ??
+        $programid = AppEnv::$_p['programid'] ?? AppEnv::$_p['prodid']  ?? 0; # $this->_rawAgmtData['programid'] ??
         $pageTitle = '';
         $baseTitleId1 = $module . ($id ? ':agredit_title':':agrnew'); # ($id) ? 'module:agredit' : 'module:agrnew';
         $baseTitleId2 = ($id ? 'title_agr' : 'title_new_agr');
@@ -2846,31 +2941,36 @@ EOHTM;
         if(!$baseTitle) $baseTitle = AppEnv::getLocalized($baseTitleId2);
         # writeDebugInfo("baseTitle $baseTitle");
         $visibleName = '';
-        if (method_exists(AppEnv::$_plugins[$this->module], 'getVisibleProductName')) {
+        if (method_exists(AppEnv::$_plugins[$this->module], 'getFullProgramName')) {
+            $visibleName = AppEnv::$_plugins[$this->module]->getFullProgramName($programid, $this->_rawAgmtData);
+            $pageTitle = $baseTitle . ' '.$visibleName;
+        }
+        elseif (method_exists(AppEnv::$_plugins[$this->module], 'getVisibleProductName')) {
             $mod = $this->module;
-            $visibleName = AppEnv::$_plugins[$this->module]->getVisibleProductName($headDept);
+            $visibleName = AppEnv::$_plugins[$this->module]->getVisibleProductName($headDept, $programid);
             $pageTitle = $baseTitle;
             if(mb_stripos($pageTitle, $visibleName)===FALSE) $pageTitle .= ' '. $visibleName;
             # writeDebugInfo("pageTitle $pageTitle");
         }
         else {
             $pageTitle = $baseTitle;
-            # writeDebugInfo("pageTitle $pageTitle");
         }
-        # if(!empty($programid)) {
+
+        if(!$visibleName) {
             $subName = AppEnv::$_plugins[$this->module]->getProgramName($programid, $this->_rawAgmtData);
             # if(!empty($subName) ) writeDebugInfo("subName=$subName, pageTitle=$pageTitle");
             if(!empty($subName) && mb_stripos($pageTitle, $subName)===FALSE) $pageTitle = "$baseTitle $subName";
-        # }
+        }
         if ($prolong) {
             $title_id = 'agredit_prolongation';
             $pageTitle = AppEnv::getLocalized($title_id); # добавить номер дог.
         }
-
+        /*
         if(method_exists($this, 'titleForAgredit')) {
             $pageTitle = $this->titleForAgredit($pageTitle);
             if(self::$debug) writeDebugInfo("pageTitle from titleForAgredit: $pageTitle");
         }
+        */
         $ouparamSet = isset($this->_deptReq['ouparamset']) ? $this->_deptReq['ouparamset'] : '';
         $getSeller = (!empty($this->_deptReq['get_seller']) && $this->input_seller);
 
@@ -2984,6 +3084,7 @@ EOJS;
 
         $html = '';
         AppEnv::setPageTitle($pageTitle);
+
         if (AppEnv::inBitrix()) AppEnv::appendHtml('<h3>'.$pageTitle.'</h3>');
 
         $this->checkGlobalBlocking($id);
@@ -3035,6 +3136,12 @@ EOJS;
             . "<input type='hidden' name='anketaid' id='anketaid' value='$anketaid' />"
             . $htmlClientId
         ;
+        if(!$stmt_id) {
+            # Пока до конца не реализовано!
+            # Новый дог, менеджер - добавляю код выблра агента "от имени которого..."
+            $myagents = $this->getMyAgents();
+            if($myagents) $html .= HtmlBlocks::chooseAgentHtml($myagents);
+        }
 
         $html .=   "<div class='p-2'>";
 
@@ -3064,18 +3171,20 @@ EOJS;
                 #  . 'value="%btn_bind_anketa%" onclick="policyModel.bindAnketa()" title="%title_bind_anketa%"></div>';
             }
         }
+
+        if (!$prolong && $this->enable_prolongate && empty($id) && empty($anketaid)) {
+            # Если новый договор, разрешена пролонгация, добавляю блок с кнопкой "Пролонгация"
+            $b_restrict = max(AppEnv::getConfigValue('alfo_disable_activity',0),
+              AppEnv::getConfigValue($this->module . '_disable_activity',0));
+
+            $prolongateOnly = ($b_restrict == 1.1);
+            $html .= Prolongator::buttonBlock('','',$prolongateOnly);
+        }
+
         if ($this->insurer_enabled) {
+
             $html .= "<div><legend>"
                 . AppEnv::getLocalized('label_insurer') . "$chk_insrIsInsd</legend>";
-
-            if (!$prolong && $this->enable_prolongate && empty($id) && empty($anketaid)) {
-                # Если новый договор, разрешена пролонгация, добавляю блок с кнопкой "Пролонгация"
-                $b_restrict = max(AppEnv::getConfigValue('alfo_disable_activity',0),
-                  AppEnv::getConfigValue($this->module . '_disable_activity',0));
-
-                $prolongateOnly = ($b_restrict == 1.1);
-                $html .= Prolongator::buttonBlock('','',$prolongateOnly);
-            }
 
             $html .= HtmlBlocks::pageInsurer($this) . '</div>';
             # {upd/2022-07-21} - блок ввода признаков риска у клиента
@@ -3158,7 +3267,7 @@ EOJS;
 
         if (!$apiParams && $ouparamSet != '') {
             # {upd/2021-05-04} добавляю на форму ввода поля под "спец-параметры" для партнера
-            include_once('class.paramdef.php');
+
             $xmlOuSet = OrgUnits::getOuParamSetFile($ouparamSet);
             $ouDef = new ParamDef($xmlOuSet);
             $paramSubForm = $ouDef->htmlForm();
@@ -3209,12 +3318,20 @@ EOJS;
         }
         else $html .= "<input type='hidden' name='no_benef' id='no_benef' value='1'>";
 
+        $jscodeReady = '';
+        # {upd/2025-10-30 - пробую ф-ционал CTRL-C / CTRL-V для копирования ЗАстрах, в ВП или ещё куда
+        if(self::$copyPastePersons) {
+            $jscodeReady .= '$("input.cp_name").on("keyup", policyModel.nameKeyUp);';
+        }
+
         if($this->insured_flex) {
             $html .= "<input type='hidden' name='insured_type' id='insured_type' value='adult'/>";
-            $jscodeReady = '$("#equalinsured,#insdbirth,#datefrom").on("change", policyModel.flexInsured);';
+            $jscodeReady .= '$("#equalinsured,#insdbirth,#datefrom").on("change", policyModel.flexInsured);';
             # добавляю обработку события для динамич.смены блоков ввода выг.приобретателя (для взрослого или ребенка)
-            AddHeaderJsCode($jscodeReady, 'ready');
         }
+
+        if($jscodeReady) AddHeaderJsCode($jscodeReady, 'ready');
+
         $restHtml = $this->home_folder . 'html/stmt_restdata.htm';
         if (is_file($restHtml)) {
             $htmlRestString = @file_get_contents($restHtml);
@@ -3723,7 +3840,16 @@ EOHTM;
                 $this->_err[] = "Некорректная дата начала действия полиса";
             }
         }
-
+        if($this->policyHasChild()) {
+            # exit('1' . AjaxResponse::showMessage('With child: <pre>' . print_r(AppEnv::$_p,1) . '</pre>'));
+            $instype = $this->_p['insurer_type'] ?? '1';
+            if(!empty($this->_p['child_delegate'])) {
+                if($this->_p['child_delegate'] === 'Y' && $instype ==2) # ЮЛ
+                    $this->_err[] = "Страхователь ЮЛ не может быть выбран Представителем Застрахованного ребенка!";
+                elseif($this->_p['child_delegate'] === 'Z' && !empty($this->_p['equalinsured'])) # Зстрах.взрослого нет
+                    $this->_err[] = "Нет взрослого Застрахованного, он не может быть выбран Представителем Застрахованного ребенка!";
+            }
+        }
         # проверки выгодоприобретателей
         if (!$bRefresh && !$this->nonlife && $this->b_benefs && empty($this->_p['no_benef']) && strpos($insuredType,'adult')!==FALSE) {
             Persons::validateBeneficiaries($this, 'benef',$this->_p);
@@ -3754,7 +3880,6 @@ EOHTM;
 
         if ( $ouparamSet != '' && empty($return) ) {
             # {upd/2021-05-04} "спец-параметры" партнера
-            include_once('class.paramdef.php');
             $xmlOuSet = OrgUnits::getOuParamSetFile($ouparamSet);
             $ouDef = new ParamDef($xmlOuSet);
             # echo 'data <pre>' . print_r($ouDef->getParams(),1). '</pre>'; exit;
@@ -3793,6 +3918,7 @@ EOHTM;
             // если код андеррайтинга установился на этапе agrCheckCalculate, то больше никаких проверок не делаю
             if ( !$this->nonlife && ( $b_newAgr || $this->uwcheck_on_save>1 ) && $this->uwcheck_on_save ) {
                 $datefrom = $this->_p['datefrom'] ?? '';
+                # writeDebugInfo("Kt-002, datefrom: [$datefrom]");
 
                 $pref = ($this->insurer_enabled && empty(AppEnv::$_p['equalinsured']) ) ?
                     'insd' : 'insr';
@@ -3809,7 +3935,7 @@ EOHTM;
                   (!empty($this->_p[$pref.'birth'])?$this->_p[$pref.'birth']:''),
                   $recid,0,0,$datefrom
                 );
-                if(self::$debug || PlcUtils::$debug || 1)
+                if(self::$debug || PlcUtils::$debug)
                     writeDebugInfo("performUwChecks() done uw_reason: ", PlcUtils::$uw_code, ' uwHardness:' , PlcUtils::$uw_hardness);
 
                 if ($this->multi_insured == 2 && !empty($this->_p['b_insured2'])) { # есть 2-ой застрахованный - проверим и его
@@ -3936,8 +4062,8 @@ EOHTM;
         if (self::$debug) WriteDebugInfo("KT-235, prodCode = $prodCode");
 
         $codirovka = $prodCode;
-
-        if (self::$debug === 1.1) WriteDebugInfo("final product ID : $product, codirovka$codirovka");
+        $agent_id = '';
+        # if (self::$debug === 1.1) WriteDebugInfo("final product ID : $product, codirovka=$codirovka");
 
         if($bRefresh) $dt = [];
         else $dt = [
@@ -3958,16 +4084,34 @@ EOHTM;
         # exit('1'.AjaxResponse::showMessage('<pre>'.print_r($dt,1).'</pre>')); # debug pitstop
         if(self::$debug>1) writeDebugInfo("codirovka: $codirovka, calculatedData: ", $calculatedData);
         if (is_array($calculatedData)) {
+            # $dateFrom = FALSE;
             # exit('1' . AjaxResponse::showMessage(__LINE__ . ' hookData: <pre>' . print_r($hookData,1) . '</pre>'));
+            if (!empty($calculatedData['datefrom'])) $dateFrom = $dt['datefrom'] = to_date($calculatedData['datefrom']);
             if (!empty($calculatedData['programid'])) $dt['programid'] = intval($calculatedData['programid']);
             if (!empty($calculatedData['policy_prem'])) $dt['policy_prem'] = floatval($calculatedData['policy_prem']);
             if (!empty($calculatedData['currency'])) $dt['currency'] = $calculatedData['currency'];
             if (!empty($calculatedData['term'])) {
                 $term = $dt['term'] = floatval($calculatedData['term']);
-                if(!empty($dateFrom)) $dt['datefrom'] = to_date($dateFrom);
+                if(!empty($dateFrom)) {
+                    $dt['datefrom'] = to_date($dateFrom);
+                    $dt['datetill'] = AddToDate($dateFrom, $term, 0, -1);
+                    if(self::$debug) writeDebugInfo("KT-003 redefine datefrom to $dt[datefrom], datetill: $dt[datetill] calcData: ", $calculatedData);
+                }
                 if (!empty($dt['datefrom']) && $term>0) $dt['datetill'] = addToDate($dt['datefrom'],$term,0,-1);
                 if (!empty($dt['currency']) && $dt['currency']==='RUR' && !empty($dt['policy_prem']))
                     $dt['policy_prem_rur'] = $dt['policy_prem'];
+                if(!empty($calculatedData['termunit'])) {
+                    $dt['termunit'] = $calculatedData['termunit'];
+                }
+                if(!empty($calculatedData['datetill'])) $dt['datetill'] = $calculatedData['datetill'];
+                else {
+                    if(!empty($dateFrom) && !empty($term) && !empty($calculatedData['termunit'])) {
+                        if(!empty($dt['termunit']) && $dt['termunit'] ==='M') # term-период в месяцах
+                            $dt['datetill'] = AddToDate($dateFrom,0,$term,-1);
+                        else
+                            $dt['datetill'] = AddToDate($dateFrom,$term,0,-1); # период в годах
+                    }
+                }
             }
             if(!empty($calculatedData['prodcode']) && $calculatedData['prodcode']) {
                 $dt['prodcode'] = $codirovka = $prodCode = $calculatedData['prodcode']; # кодировка - своя!
@@ -3985,6 +4129,7 @@ EOHTM;
             if ($newCode) $dt['prodcode'] = $codirovka = $prodCode = $newCode;
             if (self::$debug) WriteDebugInfo("subcodeModifier returned, result: $codirovka from $prodCode");
         }
+        $logPostfix = '';
         # exit("TODO: $uwcode - $codirovka");
         # exit ('1'. ajaxResponse::showMessage("prodCode: $prodCode/$codirovka, <pre>".print_r($this->_p,1).'</pre>'));
         $clientid = ($this->bindToclient) ? (AppEnv::$_p['clientid'] ?? 0) : 0;
@@ -3994,16 +4139,25 @@ EOHTM;
                 $dt['headdeptid'] = $headdept;
 
                 $myMeta = \OrgUnits::getMetaType(\AppEnv::$auth->deptid);
+                $dt['metatype'] = $myMeta;
                 if ($this->_p['insurer_type'] == 2 || $this->uw_reasonid>0)
                     $dt['bptype'] = PM::BPTYPE_STD; # ЮЛ, никакого ПЭП
+
                 # exit('1' . AjaxResponse::showMessage('Data after checks: <pre>' . print_r($dt,1) . '</pre>'));
+            }
+            else {
+                # writeDebugInfo(__FUNCTION__, " agmtdata: ", $this->agmtdata);
+                $clientid = $this->agmtdata['clientid'] ?? 0;
             }
             if ($handlepno) $dt['policyno'] = $handlepno;
             # WriteDebugInfo("dt for savin plc:", $dt);
         }
 
         # блокирую изменение даты рождения (пола?) клиента при вводе ПДн
-        if($this->bindToclient && $clientid>0) \BindClient::checkClientUpdates($this, $clientid);
+
+        if($this->bindToclient && $clientid>0) {
+            \BindClient::checkClientUpdates($this, $clientid, '',FALSE, $b_newAgr);
+        }
 
         if (!empty($dt['term'])) $term = $dt['term'];
         else $term = $this->tarif['term'];
@@ -4056,7 +4210,6 @@ EOHTM;
         }
         # TODO: другие возможные варианты, включая $this->calc?
 
-        $logPostfix = '';
         $log_change_state = FALSE;
         # доп.поля перед сохранением договора в БД
         if(method_exists($this, 'applyAgmtData'))
@@ -4221,17 +4374,41 @@ EOHTM;
             $dt['module'] = $this->module;
             $myMeta = OrgUnits::getMetaType(AppEnv::$auth->deptid);
 
+            if (AppEnv::isClientCall()) {
+                $dt['userid'] = AppEnv::getConfigValue('account_clientplc');
+                $dt['deptid'] = AppEnv::$auth->deptid;
+            }
+            else {
+                $dt['userid'] = AppEnv::$auth->userid;
+                $dt['deptid'] = AppEnv::$auth->deptid;
+            }
+            $dt['headdeptid'] = $headdept;
+
+            # myagent полис завел менеджер от имени агента
+            $agent_id = AppEnv::$_p['myagent_id'] ?? '';
+
+            if($agent_id > 0) {
+                $arAgt = AppEnv::$db->select(PM::T_USERS, ['fields'=>'firstname,usrname,deptid', 'where'=>['userid'=>$agent_id], 'singlerow'=>1]);
+                if(isset($arAgt['deptid'])) {
+                    $dt['deptid'] = $arAgt['deptid'];
+                    $dt['userid'] = $agent_id; # теперь полис как бы заведен этим агентом
+                    $dt['authorid'] = AppEnv::getUserId(); # манагер, который реально завёл полис
+                    $logPostfix .= " (агент $arAgt[firstname] $arAgt[usrname])";
+                }
+            }
+
             if(!empty($curatorid)) $dt['curator'] = $curatorid;
+
             elseif($this->agent_prod === PM::AGT_LIFE || $myMeta == OrgUnits::MT_AGENT) { # {upd/2021-02-05} для агентских продуктов/продаж:
                 # проставляю ИД куратора, активного для агента на момент создания договора
-                $dt['curator'] = \Libs\AgentUtils::getUserCurator(); # ID куратора агента
+                $dt['curator'] = \Libs\AgentUtils::getUserCurator($agent_id); # ID куратора агента
             }
             if($myMeta == OrgUnits::MT_BANK) {
                 # {upd/2023-09-25} для банк-канала - фиксирукю ИД коуча
                 $dt['coucheid'] = \Libs\AgentUtils::getDeptCouch(AppEnv::$auth->deptid);
             }
 
-            $dt['agent'] = $agentid;
+            $dt['agent'] = (empty($agentid)) ? $agent_id : $agent;
             if(!empty(AppEnv::$_p['anketaid']) && $once) {
                 if ($once) { # учитываю выбранную анкету только если была единовр.оплата!
                     $dt['anketaid'] = AppEnv::$_p['anketaid'];
@@ -4246,16 +4423,6 @@ EOHTM;
             }
             */
             # TODO: coucheid - когда будет справочник коучей с привязкой к подразд/продукту!
-
-            if (AppEnv::isClientCall()) {
-                $dt['userid'] = AppEnv::getConfigValue('account_clientplc');
-                $dt['deptid'] = AppEnv::$auth->deptid;
-            }
-            else {
-                $dt['userid'] = AppEnv::$auth->userid;
-                $dt['deptid'] = AppEnv::$auth->deptid;
-            }
-            $dt['headdeptid'] = $headdept;
 
             if ($prolong) {
                 $dt['previous_id'] = $this->_p['prolong'];
@@ -4320,7 +4487,7 @@ EOHTM;
                     $prolonged = $this->_p['prolong'] ?? NULL;
                     $payment = $dt['rassrochka'] ?? 0;
                     $programid = $dt['programid'] ?? 0;
-                    $agtEventId = \Libs\Registrator::addEvent($this->module,'new_agmt',$programid,'',$this->_p,$prolonged,$clientid,$payment);
+                    $agtEventId = \Libs\Registrator::addEvent($this->module,'new_agmt',$programid,$agent_id,$this->_p,$prolonged,$clientid,$payment);
                     # writeDebugInfo("new agmt create, event in agent log: ", $agtEventId);
                 }
                 if(self::$debug) writeDebugInfo("policy to add: ", $dt);
@@ -4449,6 +4616,10 @@ EOHTM;
             if((!$bRefresh && $this->agredit_is_calc && $fromAgrEdit>0) || AppEnv::isApiCall() ) {
                 # Только если пришел со страницы agredit, и она содержит расчетные данные (agredit_is_calc)
                 if(self::$debug) WriteDebugInfo("calling savePolicyRisks($recid,", $dt, $checkdata);
+                if(empty($dt['datefrom'])) {
+                    $dt['datefrom'] = $dateFrom;
+                    writeDebugInfo("why no datefrom: restored : [$dateFrom]");
+                }
                 $result = $this->savePolicyRisks($recid, $dt, $checkdata);
             }
 
@@ -4474,14 +4645,15 @@ EOHTM;
             }
             # writeDebugInfo("text");
             $this->finalSavings($recid); # , $initDate
-
+            # exit('1' . AjaxResponse::showMessage('Stop, Dt: <pre>' . print_r($dt,1) . '</pre>'));
             # Если включена авто-проверка PEPs при сохранении, выполняю!
             # Вопрос: что делать, если PEPs требует перевода в андеррайтинг, а полис и так уже на андерр-е по другой причине ?
             # Пока - ничего не делаю, оставляю код причины UW прежним
             $pepsComment = '';
-
+            # writeDebugInfo("peps_check_auto ", $this->peps_check_auto);
             if (!$bRefresh && $this->peps_check_auto  && !in_array($this->_rawAgmtData['stateid'], [-10,9,10,50,60])) {
                 $this->pepsState = $this->CheckFinmon($recid);
+                # writeDebugInfo("pepstate: ", $this->pepsState, " this->peps_check_auto: ", $this->peps_check_auto);
                 # $commonDta = [ 'pepstate' => ($this->pepsState+100) ];
                 if(self::$debug>1) writeDebugInfo("CheckFinmon done, peState: [$this->pepsState], peps_check_auto=[$this->peps_check_auto]");
 
@@ -4588,8 +4760,9 @@ EOHTM;
             }
 
             # предупреждение о причинах статуса черновика
-            if(PlcUtils::isDraftstateReasons() && empty($return))
+            if(PlcUtils::isDraftstateReasons() && empty($return)) {
                 PlcUtils::publishDraftStateMessage();
+            }
             if($return) {
                 return TRUE; # команда saveAgmt выполнена из refreshDates()
             }
@@ -5185,7 +5358,6 @@ EOHTM;
         }
         # writeDebugInfo("printFromCalc=[$printFromCalc]");
         if (!$printFromCalc) { # при печати из калькуляции, анкеты и прочее фуфло не нужны!
-
             # все анкеты, какие выводить на полис
             $this->addAllAnketas('P', $dta, $skipCB);
 
@@ -5547,7 +5719,7 @@ EOHTM;
             return PM::LEVEL_SUPEROPER;
 
         $editlev = FALSE;
-        if( AppEnv::$auth->getAccessLevel([PM::RIGHT_COMPLIANCE, PM::RIGHT_INFOSEC]) ) {
+        if( AppEnv::isGlobalViewRights() ) {
             $editlev = max(0.5,  AppEnv::$auth->getAccessLevel($this->privid_editor));
             $viewLev = max(6, AppEnv::$auth->getAccessLevel($this->privid_editor));
             # writeDebugInfo("Comp OR EinfoSec, editlev=$editlev, viewLev=$viewLev");
@@ -5575,7 +5747,7 @@ EOHTM;
         # WriteDebugInfo('rec:', $rec);
         if (!isset($rec['stmt_id'])) return 0;
 
-        if( AppEnv::$auth->getAccessLevel([PM::RIGHT_COMPLIANCE, PM::RIGHT_INFOSEC]) ) $ret = $editlev;
+        if( AppEnv::isGlobalViewRights() ) $ret = $editlev;
         else $ret = 0;
 
         $primaryDept = OrgUnits::getPrimaryDept();
@@ -5627,9 +5799,10 @@ EOHTM;
         $repRights = [ $this->privid_editor,$this->privid_reports ];
         $acclev = AppEnv::$auth->getAccessLevel($repRights);
 
-        $super = AppEnv::$auth->getAccessLevel([CAuthCorp::AUTH_RIGHT_SUPEADMIN]);
-        if(AppEnv::$auth->getAccessLevel([PM::RIGHT_COMPLIANCE, PM::RIGHT_INFOSEC]))
+        $super = AppEnv::$auth->getAccessLevel([PM::RIGHT_SUPERADMIN]);
+        if( AppEnv::isGlobalViewRights() ) {
             $acclev = max($acclev, 6);
+        }
         # у "выгрузчика договоров" право смотреть ВСЕ, как у супер-операциониста
 
         if ($super) $acclev = PM::LEVEL_SUPEROPER;
@@ -6094,7 +6267,9 @@ EOHTM;
         AppEnv::localizeStrings($top);
         $bottom = @file_get_contents(AppEnv::getAppFolder(AppEnv::FOLDER_TEMPLATES) . 'policymodel.bottom.htm');
 
-        $html = @file_get_contents(AppEnv::getAppFolder(AppEnv::FOLDER_TEMPLATES) . 'policymodel.view.htm');
+        $modulePath = AppEnv::getAppFolder('plugins/'.$this->module.'/templates/') . 'policymodel.view.htm';
+        $html = is_file($modulePath) ? @file_get_contents($modulePath) :
+            @file_get_contents(AppEnv::getAppFolder(AppEnv::FOLDER_TEMPLATES) . 'policymodel.view.htm');
 
         $this->loadSpecData($policyid);
         $this->getAgmtValues(__FUNCTION__);
@@ -6125,6 +6300,10 @@ EOHTM;
         if ($data['stateid'] == 11 && ($data['docflowstate'] >0 || $data['accepted']>0))
              $cmtbut = '';
         else $cmtbut = PlcUtils::getCommentButton($this->module, $policyid);
+
+        # в бэкенде можно добавить во вьюху строки о "платежах":
+        if(method_exists($this, 'viewagrAddInfo'))
+            $this->viewagrAddInfo($msubst);
 
         $msubst['{policy_comment}'] = PlcUtils::viewPolicyComment($this->module, $policyid);
         $msubst['{btn_comment}'] = $cmtbut;
@@ -6880,14 +7059,16 @@ EOHTM;
         if(!isset($this->_deptCfg['deptid']) || $this->_deptCfg['deptid']!= $head) {
             $this->_deptCfg = PlcUtils::deptProdParams($this->module,$head);
         }
-        if($this->_deptCfg['online_confirm'] >=10) return $this->_deptCfg['online_confirm'];
+        if(!empty($this->_deptCfg['online_confirm']) && $this->_deptCfg['online_confirm'] >=10)
+            return $this->_deptCfg['online_confirm'];
+
         if(!empty($this->_rawAgmtData['equalinsured'])) $canBeEdo = TRUE;
         else {
             # {updt/2025-02-04} если Основной застрахованный - ребенок, но его представитель = страхователь ФЛ, то ЭДО возможно
             $insured = Persons::getPersonData($this->_rawAgmtData['stmt_id'],'insd');
             if(!isset($insured['id']))
                 $insured = Persons::getPersonData($this->_rawAgmtData['stmt_id'],'child');
-            $insdAge = \RusUtils::yearsBetween($insured['birth'], $this->_rawAgmtData['datefrom']);
+            $insdAge = \RusUtils::yearsBetween($insured['birth'], ($this->_rawAgmtData['datefrom'] ?? ''));
 
             if($insdAge < PM::ADULT_START_AGE || $insured['ptype'] === 'child') {
                 $specDta = $this->loadSpecData($this->_rawAgmtData['stmt_id']);
@@ -8308,7 +8489,7 @@ EOHTM;
 
         $stDetails = $this->getStateDetails();
         $agmtdata = AgmtData::getData($this->module,$data['stmt_id']);
-        if(PlcUtils::isDateValue($agmtdata['date_release'])) {# обновляю дату выпуска
+        if(PlcUtils::isDateValue($agmtdata['date_release'] ?? '')) {# обновляю дату выпуска
             # writeDebugInfo("обновляю дату выпуска ", $agmtdata['date_release']);
             $ret .= AjaxResponse::setValue('date_release', to_char($agmtdata['date_release']));
         }
@@ -8759,7 +8940,6 @@ EOHTM;
         if ($this->reportDept >0) {
             $deptReq = OrgUnits::getOuRequizites($this->reportDept);
             if (!empty($deptReq['ouparamset'])) {
-                include_once('class.paramdef.php');
                 $xmlOuSet = OrgUnits::getOuParamSetFile($deptReq['ouparamset']);
                 $ouDef = new ParamDef($xmlOuSet);
                 $this->_repOuFields = $ouDef->getParams();
@@ -8806,7 +8986,7 @@ EOHTM;
         $where[] = "(b_test=0)"; # no test polisies in report
 
         $filters = implode(' AND ', $where);
-        $ret = "SELECT stmt_id,userid,policyno,created,insurer_fullname,insured_fullname,rassrochka,datefrom, datetill, prodcode, '' `benefs`, currency, term, policy_prem "
+        $ret = "SELECT metatype,stmt_id,userid,policyno,created,insurer_fullname,insured_fullname,rassrochka,datefrom, datetill, prodcode, '' `benefs`, currency, term, policy_prem "
           . ",policy_sa,policy_prem_rur, 'risks' risks, stateid,bpstateid,bpstate_date,'tabnomer' tabnomer, deptid,headdeptid,datepay,diss_date,accepted,coucheid,seller " # , dt.date_release
           . " FROM alf_agreements p"
           # ." LEFT JOIN alf_agmt_data dt ON (dt.policyid=p.stmt_id AND dt.module=p.module)" # если захотят дат выпуска
@@ -9224,10 +9404,12 @@ EOHTM;
     *
     * @param mixed $id
     */
-    public static function showPolicyNo($param) {
+    public static function showPolicyNo($param, $arRow=FALSE) {
+        # writeDebugInfo("showPolicyNo param: ", $param, " arRow: ", $arRow, " trace:", debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 3));
         global $ast_datarow;
-        $module = $ast_datarow['module']; // $this->module;
-        $ret = "<a href='./?plg=$module&action=viewagr&id=".$ast_datarow['stmt_id']."'>$param</a>";
+        if(!is_array($ast_datarow) && is_array($arRow)) $ast_datarow =& $arRow;
+        $module = $ast_datarow['module'] ?? ''; // $this->module;
+        $ret = "<a href='./?plg=$module&action=viewagr&id=".($ast_datarow['stmt_id']??'xx')."'>$param</a>";
         return $ret;
     }
     public function isNonLife() { return $this->nonlife; }
@@ -9427,23 +9609,7 @@ EOHTM;
     public static function getProductsCodes($module='') {
         return Modules::getProductsCodes($module);
     }
-    /**
-    * Пришел AJAX запрос на динамическую смену списка кодировок в BLIST-поле
-    * Формирую HTML код и отсылаю клиенту. - унес в applists
-    *
-    public static function gethtml_blist() {
-        $flid = isset(AppEnv::$_p['field']) ? AppEnv::$_p['field'] : '';
-        $ret = '';
-        switch ($flid) {
-            case 'prodcodes':
-            case 'codelist':
-                # $module = isset(AppEnv::$_p['module']) ? AppEnv::$_p['module'] : '';
-                $ret = Modules::gethtml_blist();
-                break;
-        }
-        exit($ret);
-    }
-    */
+
     public static function addUwDetails($policyno,$datefrom, $datetill, $risksum=0, $currency='--') {
         self::$uw_details[] = array($policyno,$datefrom, $datetill, $risksum, $currency);
     }
@@ -10135,6 +10301,7 @@ EOHTM;
             WriteDebugInfo("Finmonitor request params:", $req);
         }
         $result = ( $fmBackEnd->isError()) ? '---' : $fmBackEnd->request($req, $persid);
+        $uwcheckCode = 0;
 
         # writeDebugInfo("persid=[$persid], person data: ", $dta['insr'], ' result :', $result);
 
@@ -10246,7 +10413,6 @@ EOHTM;
             }
 
         }
-        $uwcheckCode = 0;
         if($fmBackEnd->getErrorMessage()) {
             AppEnv::addInstantMessage("Проверка Комплайнс не была выполнена (ошибка обращения к сервису)!", 'finmonotr_svc');
         }
@@ -10263,20 +10429,25 @@ EOHTM;
                 if ($result) $htmlResult .= "\treloadGrid"; # обновит список сканов с учтокм нового "лога"
             }
             $uwcheckCode = $fmBackEnd->getCheckSummary(); # 0 - OK, 1=STATE_TO_UW, 10=STATE_BLOCKING,
-            # writeDebugInfo("finmonitor check total code: [$uwcheckCode]");
+
             $pepsUpd = ['pepstate'=>($uwcheckCode+100)];
+
             # writeDebugInfo("agmtdata ", $this->agmtdata );
+
             if($uwcheckCode > 0 && empty($this->agmtdata['reasonid'])) {
-                $pepsUpd['reasonid'] = PM::UW_REASON_PEPSCHECK;
+                PlcUtils::$uw_code = $pepsUpd['reasonid'] = PM::UW_REASON_PEPSCHECK;
                 if($this->agmtdata['stateid']==PM::STATE_FORMED && $this->agmtdata['substate'] == PM::SUBSTATE_AFTER_EDIT) {
                     $pepsUpd['substate'] = PM::SUBSTATE_COMPLIANCE; # надо отправить в Комплаенс
                     if(self::$debug) writeDebugInfo("доработка, снова отправляю в Комплаенс");
                 }
+                elseif(in_array($this->agmtdata['stateid'], [PM::STATE_PROJECT, PM::STATE_IN_FORMING]))
+                    PlcUtils::$uw_code = $pepsUpd['reasonid'] = PM::UW_REASON_PEPSCHECK;
             }
 
             if(self::$debug) writeDebugInfo("to update after PEPs check: ", $pepsUpd); # AppEnv::$db->log(10);
             # $res = AppEnv::$db->update(PM::T_POLICIES, $pepsUpd, ['stmt_id'=>$id]);
             $res = PlcUtils::updatePolicy($this->module, $id, $pepsUpd);
+            # writeDebugInfo("update peps: $res, sql:", AppEnv::$db->getLastQuery(), ' err:',  AppEnv::$db->sql_error());
         }
         # сохранил код "рисковости" по результатам PEPs-проверок
 
@@ -11241,11 +11412,11 @@ EOHTM;
             }
         }
         if(empty($outFile)) exit("Файл мед-декларации не настроен!");
-        $fullName = AppEnv::getAppFolder("plugins/$this->module/printcfg/") . $outFile .'.pdf';
+        $fullName = AppEnv::getAppFolder("plugins/$this->module/printcfg/") . $outFile;
         # ИДЕЯ: если в папке плагина файла нет, можно поискать "стандартный в templates/declarations/ ?
         # exit("main:$main, declarFile: $fullName, is exist: [".is_file($fullName). ']<br>');
         if(is_file($fullName)) AppEnv::sendBinaryFile($fullName);
-        else exit("Извините, файл мед.декларации не найден: $outFile.pdf");
+        else exit("Извините, файл мед.декларации не найден: $outFile");
         # exit(__FILE__ .':'.__LINE__."plcid=$plcid plcData:<pre>" . print_r($plcdata,1) . '</pre>');
     }
     # добавляет текст в поле special_conditions
@@ -11434,5 +11605,24 @@ EOHTM;
     public function startReEDO() {
         $stmtid = isset($this->_p['id']) ? $this->_p['id'] : 0;
         EdoRework::startEdo($this->module, $stmtid);
+    }
+
+    # {upd/2025-11-10} картинка с подписью подписанта для анкет
+    public static function getAnketaSignerImage() {
+        if(!empty(self::$anketa_signer_image)) $ret = self::$anketa_signer_image;
+        else $ret = 'signers/Mustafaeva.png';
+        return $ret;
+    }
+    # {upd/2025-11-20} Если юзер - в роли менеджера в аг.сети, вернет все учетки агентов в подразд-ии и дочках
+    public function getMyAgents($onlyActive=TRUE) {
+
+        if(!$mgrMode=AppEnv::getConfigValue('lifeag_mgrmode',FALSE)) return FALSE;
+        $myLevel = $this->getUserLevel();
+        # writeDebugInfo("mgrMode=$mgrMode, my level: ", $myLevel);
+        if(AppEnv::getMyMetaType() != OrgUnits::MT_AGENT) return FALSE;
+        if($myLevel != PM::LEVEL_MANAGER) return 0;
+        $operRole = ($mgrMode == 1) ? '' : '*';
+        $arRet = \Libs\AgentUtils::amIManagerWithAgents($this->module,TRUE,$operRole);
+        return $arRet;
     }
 } # PolicyModel end

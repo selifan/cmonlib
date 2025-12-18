@@ -23,8 +23,8 @@ class BusinessProc {
     private static $setReleaseOnPay = FALSE; # устанавливать ли дату выпуска при оплате (агенты)
     private static $_onceCalled = 0;
     private static $buttonSets = [
-      'std' => ['recalc','edit','refreshdates','start_edo','start_not_edo','editagr','start_check','printstmt','set_meddeclar','set_speccond',
-          'uploadstmt','uploadallscan','pay_state','set_payed','send_eqpay','printpack','print_a7','print_anketas',
+      'std' => ['recalc','edit','refreshdates','start_edo','start_not_edo','editagr','start_check','printstmt','set_meddeclar','set_speccond','start_uw',
+          'uploadstmt','uploadallscan','pay_state','set_payed','send_eqpay','printpack','print_a7','print_anketas','start_dopcheck',
           'setstate','uploaddocs','setstateformed','edo_client_letter','setstate_uwok','setstate_uwreq','setstate_uwdeny',
           'setstatecancel','setstate_annul','to_xml','checkfinmon','to_docflow','to_docflow_uw','dissolute'],
 
@@ -65,10 +65,7 @@ class BusinessProc {
             $buttons = self::$buttonSets[$bp];
         }
         $ret = ($format === self::FMT_ALLBUTTONS) ? [] : '';
-        $allDefs = AllButtons::$buttons;
-
-        if(count(self::$userButtons))
-            $allDefs = array_merge($allDefs, self::$userButtons);
+        $allDefs = count(self::$userButtons) ? self::$userButtons : [];
 
         foreach($buttons as $btid) {
             $valueid = isset($allDefs[$btid]['valueid']) ? $allDefs[$btid]['valueid'] : ('button_'.$btid);
@@ -243,22 +240,29 @@ class BusinessProc {
         # {upd/2025-03-20} на UW может послать только ПП после своей доп.проверки!
         $bStartDopCheck = $hardCase = 0; # ( in_array($obj->agmtdata['stateid'], [PM::STATE_PAUSED]) && $userLevel<=PM::LEVEL_MANAGER );
         $uwReasons = \UwUtils::getAllReasons($module, $obj->agmtdata['stmt_id'], TRUE);
-
+        # writeDebugInfo("final uwReasons after PEPS checks", $uwReasons);
         if($plcdata['stateid']<PM::STATE_UNDERWRITING && !empty($uwReasons)) {
             if(!empty($uwReasons['hard'])) {
 
                 if($plcdata['stateid']==PM::STATE_PROJECT && !empty($uwReasons['light'])) $bStartDopCheck = 1; # сначала - доп-проверка ПП
                 # elseif($plcdata['stateid']==PM::STATE_PAUSED) $bStartDopCheck = 1;
-                elseif($plcdata['stateid']==PM::STATE_DOP_CHECK_DONE || empty($uwReasons['light'])) $bStartUw = 1;
-                elseif(in_array($plcdata['stateid'], [PM::STATE_DOP_CHECK_FAIL,PM::STATE_PAUSED])) $bStartUw = 1; # проверка НЕ прошла либо только hard
+                elseif($plcdata['stateid']==PM::STATE_DOP_CHECK_DONE || empty($uwReasons['light'])) {
+                    $bStartUw = 1;
+                    # writeDebugInfo("uw=1 KT-001");
+                }
+                elseif(in_array($plcdata['stateid'], [PM::STATE_PROJECT, PM::STATE_DOP_CHECK_FAIL,PM::STATE_PAUSED])) {
+                    $bStartUw = 1; # проверка НЕ прошла либо только hard
+                    # writeDebugInfo("uw=1 KT-002");
+                }
                 # только тяж.причины, или легкая проверка уже - кнопа UW
-                if(self::$debug || $RAZBORKI) writeDebugInfo("hard UW case: bStartCheck=[$bStartDopCheck], bStartUw=[$bStartUw], uwReasons: ", $uwReasons);
+                if(self::$debug || $RAZBORKI) writeDebugInfo("hard UW case: bStartDopCheck=[$bStartDopCheck], bStartUw=[$bStartUw], uwReasons: ", $uwReasons);
 
             }
             elseif($plcdata['stateid']==PM::STATE_PROJECT && !empty($uwReasons['light'])) {
                 $bStartDopCheck = 1; # полис с причиной на UW,но не жесткой - послать на доп-проверку
                 $bStartUw = 0; # ($userLevel>=PM::LEVEL_IC_ADMIN);
-                if(self::$debug) writeDebugInfo("only light check: bStartCheck=[$bStartDopCheck], bStartUw=[$bStartUw] uwReasons: ", $uwReasons);
+                # writeDebugInfo("uw=0 KT-003");
+                if(self::$debug || $RAZBORKI) writeDebugInfo("only light check: bStartDopCheck=[$bStartDopCheck], bStartUw=[$bStartUw] uwReasons: ", $uwReasons);
             }
         }
 
@@ -356,7 +360,8 @@ class BusinessProc {
         }
         # {upd/2023-03-21} если "тяжесть" причины UW не 10, то можно еще выбрать "соотв-вие декларации" - но только в агентских!
         $bMedDeclar = (!$expiredRel && !$edoMode && $docaccess>=1.5 && $obj->enable_meddeclar && (!$iAmUw || $myPlcMgr)
-          && in_array($plcdata['stateid'], [0,1,6,PM::STATE_DOP_CHECK_DONE,PM::STATE_DOP_CHECK_FAIL]) && empty($plcdata['med_declar']));
+          && in_array($plcdata['stateid'], [0,1,6,PM::STATE_DOP_CHECK_DONE,PM::STATE_DOP_CHECK_FAIL]) && empty($plcdata['med_declar'])
+          && empty($plcdata['reasonid']));
         # && empty($plcdata['med_declar'] && empty($uwReasons['hard']) # И.Яковлева сказала -давть агенту проставить соотв-е декларации даже при тяжелых причинах UW
         # writeDebugInfo("bMedDeclar=[$bMedDeclar], ", $plcdata['med_declar']);
         $obj->enableBtn('set_meddeclar', $bMedDeclar);
@@ -676,8 +681,8 @@ class BusinessProc {
         $obj->enableBtn('extended_av', $btExtAv);
         # отправить на UW - при наличии причин UW (операционист/агент) - либо если оплату полиса профукали, и надо снова отправлять на UW
         $bStartUw = $bStartUw && (in_array($agmt_state, [PM::STATE_PROJECT, PM::STATE_DOP_CHECK_DONE,PM::STATE_DOP_CHECK_FAIL, PM::STATE_PAUSED]))
-          && (!empty($plcdata['med_declar']||$canUseEdo>=10) );
-        if($RAZBORKI) writeDebugInfo("KT-003 now bStartUw=[$bStartUw] agmt_state=$agmt_state, med_declar:",$plcdata['med_declar']);
+          && (!empty($plcdata['med_declar']||$canUseEdo>=10 || $uwReasons['hard']) );
+        if($RAZBORKI) writeDebugInfo("KT-003 now bStartUw=[$bStartUw] agmt_state=$agmt_state, med_declar:",$plcdata['med_declar'], " canUseEdo=[$canUseEdo] uwReasons: ",$uwReasons);
         if($agmt_state == PM::STATE_DOP_CHECK_FAIL && (!empty($plcdata['med_declar'])||$canUseEdo>=10)) $bStartUw = TRUE;
         /*
         $bStartUw = $bStartUw && !$paused && !$prolongExpired && !$calcExpired && !$bMedDeclar && !$policyExpired
@@ -688,11 +693,11 @@ class BusinessProc {
         # TODO: если протухла макс.дата д-вия, снова делать доступной отправку на UW!
         # writeDebugInfo("bStartUw=[$bStartUw, bMedDeclar=[$bMedDeclar], paused=[$paused], reasonid=[$reasonid], ", ' policyCalcExpired:[',$obj->policyCalcExpired(), '] stateid=',$plcdata['stateid'], ' $docaccess:',$docaccess);
         # if($plcdata['stateid'] == PM::STATE_IN_FORMING) $bStartUw = 0; # этап пройден, UW уже не нужен (проверка пройдена)
-        if(!empty($_GET['btndebug'])) # что за хрень с кнопками?
-            exit("bMedDeclar=[$bMedDeclar], paused=[$paused] invest_anketa=[".$obj->invest_anketa
+        if(!empty($_GET['btndebug']) || $RAZBORKI) # что за хрень с кнопками?
+            writeDebugInfo("bMedDeclar=[$bMedDeclar], paused=[$paused] invest_anketa=[".$obj->invest_anketa
               . "], reasonid=[$reasonid],  prolongExpired=[$prolongExpired], "
               . "policyExpired=[$policyExpired], policyCalcExpired:[".$obj->policyCalcExpired()
-              ."] stateid=$plcdata[stateid], <br>docaccess: [$docaccess]  myAgmt=[$myAgmt] saleSupport=[$saleSupport], bStartUw=[$bStartUw]");
+              ."] stateid=$plcdata[stateid], <br>docaccess: [$docaccess]  myAgmt=[$myAgmt] saleSupport=[$saleSupport], bStartUw=[$bStartUw] uwBlocking=[$uwBlocking]");
 
         if($uwBlocking) $bStartUw = 0; # продукт не подразумевает класс.андеррайтинг (коробки - Амулет...)
         # else $bStartUw = ($bStartUw || $bUnpause); # если для ПП доступна кнопка "проверка пройдена", то им же открыть кнопку "На UW"
@@ -872,7 +877,7 @@ class BusinessProc {
                 # writeDebugInfo("canUseEdo=$canUseEdo, canStartEdo=$canStartEdo");
                 $obj->enableBtn('start_edo', $canStartEdo);
                 $obj->enableBtn('start_not_edo', FALSE); # не ЭДО процесс невозможен
-                $obj->enableBtn('set_meddeclar', FALSE); # ЭДО - мед-декоарацию руками не проставляем?
+                $obj->enableBtn('set_meddeclar', FALSE); # ЭДО - мед-декларацию руками не проставляем?
 
             }
             else {

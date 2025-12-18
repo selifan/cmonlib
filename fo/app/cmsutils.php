@@ -4,8 +4,8 @@
 * @name app/cmsutils.php
 * Функции получения данных из ALFO либо из внешней CMS Bitrix (если обнаружена)
 * доп.ф-ции обработки данных для отчетов
-* @version 1.21.001
-* modified 2025-09-19
+* @version 1.21.003
+* modified 2025-12-17
 */
 class CmsUtils {
     const VERSION = '1.21';
@@ -18,6 +18,7 @@ class CmsUtils {
     public static function getUserInfo($userid, $cms_userid=FALSE) {
       # if (!appEnv::isProdEnv()) self::$debug = 1;
       $ret = [];
+      $btxid = 0;
       if($userid > 0) {
           $dta = appEnv::$db->select(PM::T_USERS, array(
             'where' => array('userid'=>$userid)
@@ -169,7 +170,7 @@ class CmsUtils {
             $where[] = "(EMAIL IS NOT NULL AND EMAIL<>'')"; # с пустым Email неинтересно
             if($onlyActive) $where['ACTIVE'] = 'Y';
             $foundRec = AppEnv::$db->select("$btxDb.b_user", ['where'=>$where, 'orderby'=>'ID DESC']);
-            writeDebugInfo("in Btx: ", AppEnv::$db->getLastQuery(), AppEnv::$db->sql_error(), " result:", $foundRec);
+            # writeDebugInfo("in Btx: ", AppEnv::$db->getLastQuery(), AppEnv::$db->sql_error(), " result:", $foundRec);
             if(is_array($foundRec) && count($foundRec)) return $foundRec;
         }
         $where = ['usrname'=> $nmParts[0]];

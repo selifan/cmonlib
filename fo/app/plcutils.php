@@ -2,13 +2,13 @@
 /**
 * @package ALFO
 * Набор доп.утилит для работы с полисами любого типа (policymodel / investprod)
-* @version 1.95.001
-* modified 2025-10-22
+* @version 1.98.001
+* modified 2025-12-11
 */
 # error_reporting(E_ALL & ~E_STRICT & ~E_NOTICE); ini_set('display_errors', 1); ini_set('log_errors', 1);
 if (!class_exists('PlcUtils')) {
 class PlcUtils {
-    const VERSION = '1.95.001';
+    const VERSION = '1.97';
     const PERMIT_TYPES = 1; # Разрешить выбор типа документа, разрешающего пребывание
     private static $payExpireAfter = 0; # блокировка оплаты после N дней с даты начала действия
     private static $seekOtherPolicies = TRUE;
@@ -31,7 +31,7 @@ class PlcUtils {
     const MASK_PHONENO   = '999-9999'; # общая маска для ввода только телефона
     const PHONE_RUSPREF = '+7'; # {upd/2023-05-10} добавляю перед выводимым номером телефона
     const IKP_PREFIX = 'Ж-'; # коды ИКП могут прилетать (с большого сайта) без этого префикса - добавлять при поиске по базе
-
+    static private $policyDeptId = FALSE; # здесь будет запоминаться ИД поразделения в открытой карточке полиса
     static private $stateFailed = FALSE; # поднять флаг "глобального сбоя" при ошибке в одной из последовательных операций
     static private $failDetails = [];
     static $CHECK_BENEFS = TRUE; # флаг проверка выгодоприобретателей по спискам террористов/PEPS
@@ -125,6 +125,8 @@ class PlcUtils {
      ,'10' => 'Отменен'
      ,'11' => 'Оформлен'
      ,'30' => 'На проверке у Комплайнс'
+     ,'33' => 'На проверке у ИБ'
+     ,'63' => 'На проверке у Комплайнс и ИБ'
      ,'50' => 'Расторгнут'
      ,'60' => 'Блокирован'
 
@@ -2967,14 +2969,17 @@ EOHTM;
         }
         if (isset($ret['signer_name'])) {
             $full_delim = ' '; # "\r\n"; # Для сокращения занимаемого места принуд.перевод после должности строки убрал
+            if($ret['signer_dov_no'] == -1 || $ret['signer_dov_no'] ==='-') $dovertxt = '';
+            else {
             $dovertxt = ((!empty($ret['signer_dov_no']) ?
-                (', действующий(ая) на основании Доверенности № '.$ret['signer_dov_no']. ' от '.$ret['signer_dov_date'])
-                : ', действующий(ая) на основании Устава'));
+                ('Действующий(ая) на основании Доверенности № '.$ret['signer_dov_no']. ' от '.$ret['signer_dov_date'])
+                : 'Действующий(ая) на основании Устава'));
+            }
+            $ret['ic_signer_full'] = $ret['signer_duty'] . $full_delim . $ret['signer_name'];
 
-            $ret['ic_signer_full'] = $ret['signer_duty'] . $full_delim . $ret['signer_name']. ', ' # "\r\n"
-               . $dovertxt;
+            if(!empty($dovertxt)) $ret['ic_signer_full'] .= ', ' . $full_delim . $dovertxt;
+
             $ret['ic_signer_fio'] = MakeFio($ret['signer_name']); # поле "расшифровка подписи"
-#            WriteDebugInfo('signer info:', $ret);
         }
 
         # взять path+filenames картинок штампов+afrcbvbkt в соотв-вии с настройкой продукта
@@ -4576,7 +4581,7 @@ EOHTM;
             if (!empty($data['ul_signer_duty'])) $sblock = $data['ul_signer_duty'] . ' '. $sblock;
             $data['ul_head_name'] = $sblock; # Должность ФИО- для опрос-листа FATCA (oplist-ul.xml)
             $data['ul_osnovanie'] = '';
-            if (!empty($data['ul_signer_dovno']) || !empty($data['ul_signer_dovdate'])) {
+            if (!empty($data['ul_signer_dovno']) && $data['ul_signer_dovno']!=-1 && $data['ul_signer_dovno']!=='-') {
                 $sblock .= ", действующий(ая) на основании доверенности";
                 if (!empty($data['ul_signer_dovno'])) {
                     $sblock .= ' № '. $data['ul_signer_dovno'];
@@ -4962,7 +4967,7 @@ EOHTM;
         $module = AppEnv::$_p['module'] ?? $mdl ?? '';
         $id = AppEnv::$_p['id'] ?? $plcid ?? 0;
         # {upd/20223-12-20} теперь в рисковых приходит введенная дата начала д-вия
-        $dtStart = appEnv::$_p['dt_start'] ?? $dstart ?? '';
+        $userDtStart = $dtStart = appEnv::$_p['dt_start'] ?? $dstart ?? '';
 
         $dtMandatory = isset(appEnv::$_p['dt_start']);
 
@@ -5142,7 +5147,9 @@ EOHTM;
             # else writeDebugInfo("release date уже стоит, нек меняю! ", $data['date_release']);
 
             $pref = $bkend->getLogPref();
-            AppEnv::logEvent($pref."RELEASE POLICY", "Произведен выпуск полиса", 0, $id);
+            # {upd/2025-11-18} заношу в лог введенную агентом дату начала
+            $postText = ($userDtStart) ? (", дата начала: ".to_char($userDtStart)) : '';
+            AppEnv::logEvent($pref."RELEASE POLICY", "Произведен выпуск полиса{$postText}", 0, $id);
             $notProlong = empty($data['previous_id']);
 
             if($notProlong) {
@@ -6187,6 +6194,11 @@ EOHTM;
             $dta['b_oprisky_no'] = 1; # проставляю галкe о безрисковости клиента
         }
 
+        # {upd/2025-11-11} для печати должности, ФИО и сигнатуры сотрудника от СК в зав.от канала
+        $metaType = $bkend->_rawAgmtData['metatype'] ?? '';
+        AnketaPrint::loadSignerData($dta, $metaType);
+        $dta['datesign'] = date('d.m.Y'); # Мустафаева Сабина - можно текущую дату
+
         PM::$pdf->AddData($dta);
         $echoed = ob_get_clean();
 
@@ -6568,6 +6580,12 @@ EOHTM;
     # {upd/2025-10-22} вернет флаг наличия у текущей учетки сотрудника роли офицера Инфо-Беза
     public static function iAmInfoSecurity() {
         return appEnv::$auth->userHasRights(PM::RIGHT_INFOSEC);
+    }
+    public static function setPolicyDept($deptid) {
+        self::$policyDeptId = $deptid;
+    }
+    public static function getPolicyDept() {
+        return self::$policyDeptId;
     }
 } # class end
 
