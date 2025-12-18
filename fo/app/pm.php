@@ -2,10 +2,10 @@
 /**
 * @name app/pm.php
 * константы для функций, коды статусов полиса, причин постановки на андеррайтинг...
-* @version 2025-09-18
+* @version 2025-12-17
 */
 class PM {
-    const VERSION = '1.49';
+    const VERSION = '1.50';
     const INVEST = 'investprod'; # модуль ИСЖ
     const INVEST2 = 'invins'; # модуль ИСЖ-2
     const RSK_MAIN_ENDOWMENT = 'main_endowment'; # для "универсальных" ИД рисков (поле alf_agmt_risks.rtype , НО НЕ riskid !!!)
@@ -88,11 +88,14 @@ class PM {
     const T_SIZESTATS = 'sitesize_stats'; # здесь заносим остаток своб.места на дату, для оценки сколько осталось дней
     const T_PLCPACKS = 'alf_plcpackets'; # Пакеты полисов одного клиента
     const T_PLCBIND = 'auto_binded_policies'; # Регистрация авто-привязок полисов в КК
+    const T_SESARHIV = 'alf_sesarhiv'; # архив кодов ПЭП
 
     # таблицы для работы с авто-платежами
     const T_AUTOPAYMENTS = 'alf_autopayments'; # полисы с включенным авто-списанием (авто-платежи)
     const T_PAYPLAN = 'alf_payplan'; # график платежей
     const T_CLIENTS = 'alf_clients'; # список клиентов (для агентов)
+    const T_CHATBOT_HIST = 'chatbot_hist'; # табличка для истории запросов к чат-боту
+    const T_CHATBOT_CONTEXTS = 'chatbot_contexts'; # Настроенные контексты для чат-бота
 
     const TABLE_TRANCHES ='alf_tranches'; # таблица дат окон продаж и траншей
     const TABLE_CUMLIR ='alf_cumlir'; # таблица кумулятивных лимитов по рискам (для андеррайтинга по кумул.лимитам)
@@ -147,6 +150,8 @@ class PM {
     const STATE_FORMED = 11;
     const STATE_UWDENIED = 12; # НЕ согласовано андеррайтером
     const STATE_COMPLIANCE_CHECK = 30; # NEW: на проверке у Комплайнс (нашлись PEPS-ы, блокированные/террористы)
+    const STATE_IB_CHECK = 33; # NEW: на проверке у ИБ (нашлись совпадение в списках СБ(PEP's2)/треб.доп-проверки партнера (СБ))
+    const STATE_COMPLIANCE_IB_CHECK = 63; # NEW: на проверке (Комплайнс + ИБ)
     const STATE_DISSOLUTED = 50; # расторгнут
     const STATE_DISS_REDEMP = 51; # расторгнут с выкупной
     const STATE_BLOCKED = 60; # заблокирован для дальнейших действий
@@ -177,6 +182,16 @@ class PM {
     const SUBSTATE_REWORK = 101; # договор на доработке
     const SUBSTATE_REWORK_DONE = 102; # банк выполнил доработку
     const SUBSTATE_NEED_RECALC = 110; # Запрошен перерасчет андеррайтера
+    const SUBSTATE_AFTER_EDIT  = 111; # полис на доработке отредактировали успешно (проверку комплайнс и UW прошел)
+    const SUBSTATE_EDITED      = 111; # полис на доработке отредактировали успешно (проверку комплайнс и UW прошел)
+    const SUBSTATE_COMPLIANCE = 120; # После редактирования данных в полисе на доработе сработал триггер (ч.списки или UW)
+    const SUBSTATE_COMPL_CHECKING = 121; # отправили на проверку в комплайнс, ждем ответа
+    const SUBSTATE_COMPL_CHECK_OK = 122; # комплайнс сказали всё ОК
+
+    const SUBSTATE_EDO2_STARTED = 125; # отправили клиенту ссылку на повт.согласование изменений
+    const SUBSTATE_EDO2_OK = 123; # Клиент прислал онлайн согласие с изменениями в полисе
+    const SUBSTATE_EDO2_FAIL = 124; # Клиент прислал онлайн НЕсогласие с изменениями в полисе (т.е. повторное редактир-е или расторж-е)
+    const SUBSTATE_COMPL_OK = 130; # комплайнс подтвердил, что НЕ ТЕРРОРИСТ, а совпадение ФИО (можно оформлять)
 
     # TODO: новые статусы для агентских биз-процессов (свободные коды 1,5,8)
     # причины перевода полиса в статус "требует андеррайтинга" (поле reasonid)
@@ -245,11 +260,11 @@ class PM {
 
     # UW коды которые могут быть сброшены после редактирования ПДн в арточке полиса
     public static $noDeclarReasons = [1,11,20,22,25,26,27,28,30,31,32,33,34,36,40,41,42,43,143,44,45,46,52,702];
-    # легкие причины андеррайтинга (которые может разрулить ПП)
+    # легкие причины андеррайтинга (которые может разрулить ПП или комплайнс)
     public static $lightUwReasons = [ 25 ]; #  # {upd/2025-04-22} - ,26,56 налоговые нерезы снова влекут UW (И.Яковлева)
 
     const UW_REASON_CALCONDITIONS = 720; # UW по условиям калькуляции
-    const UW_REASON_REINVEST = 721; # договор реинвестиционный, подлежит андеррайтиннгу!
+    const UW_REASON_REINVEST = 721; # договор реинвестиционный, подлежит андеррайтингу!
 
     const NDS_PERCENT = 18; # процент НДС
     const ZIPCODE_LEN = 6; # длина почтового индекса (верхний лимит)
@@ -270,6 +285,7 @@ class PM {
     const TXT_BENEF_BY_LAW = 'Выгодоприобретатель в соответствии с Законодательством Российской Федерации';
 
     const RIGHT_SUPEROPER = 'agmt_superoper'; # в справочнике прав - право глобального супер-операциониста (все виды договоров/все плагины)
+    const RIGHT_SUPERADMIN = 'superadmin'; # суперадмин/супервизор системы
     const RIGHT_ACCEPTOR  = 'agmt_accept'; # в справочнике прав - право акцептации договоров
     const RIGHT_POLICYNO  = '_enterno'; # право на ручной ввод номера заявл-я полиса (вместо авто-выдачи из пула)
     const RIGHT_DOCFLOW   = 'docflow_oper'; # видны все полисы, есть право выгрузки в СЭД
@@ -374,6 +390,7 @@ class PM {
       'edo_zayav' => 'Заявление на страхование (ЭДО)',
       'calculation' => 'Расчет стоимости', # HappyHome - XLS файл с расчетом (ну и где еще пригодится)
       'sogl_pdn' => 'Согласие на обработку ПДн',
+      'sogl_av' => 'Согласование АВ',
       'other_docs' =>'Прочие документы',
     );
     public static $personFields = [ # список имен полей ФЛ/ЮЛ
@@ -387,6 +404,7 @@ class PM {
     ];
 
     public static $scanEdoPolicy = 'edo_policy'; # тип файла "цифровая версия полиса с ЭЦП", для ЭДО-процесса
+    public static $scanPolicy = 'signed_policy'; # скан подписанного полиса
     public static $scanEdoZayav  = 'edo_zayav'; # {upd/2024-08-05} тип файла "цифровая версия Заявления (ЭДО)"
     public static $scanCheckLog = 'checklog'; # тип файла проверка по спискам террористов
     public static $pdf = NULL; # общий инстанс PrintformPdf
@@ -394,7 +412,8 @@ class PM {
     public static $compPhones = '(495)232-0100';
 
     # {upd/2022-12-08} Список старых продуктов (не выводить "отчеты" и проч)
-    public static $deadProducts = ['azgarant','fzacoll','garcl','garplus','hhome','insfza','invonline','planb','plgkpp','investprod'];
+    public static $deadProducts = ['agtlife','azgarant','fzacoll','garcl','garplus','hhome','insfza','invonline',
+      'planb','plgkpp','investprod', 'trmig','ali', 'bestdoc', 'kpp','bank', 'smt'];
     # статусы, пр которых можно обновить дату начала д-вия полиса
     public static $editStates = [self::STATE_DRAFT,self::STATE_PROJECT,self::STATE_UNDERWRITING,self::STATE_POLICY]; # self::STATE_IN_FORMING ??
 }

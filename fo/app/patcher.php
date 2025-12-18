@@ -4,7 +4,7 @@
 * @name app/patcher.php
 * Обновление данных, структур таблиц в БД (запускать после наката из GIT)
 * @author Alexander Selifonov
-* modified 2025-09-18, A.Selifonov
+* modified 2025-12-17, A.Selifonov
 **/
 if (!class_exists('appEnv')) include_once(__DIR__ .'/alfo_core.php');
 
@@ -1134,6 +1134,15 @@ EOSQL;
         self::initTable('alf_stamps'); # 2025-09-08...17 signer_digialias,signer_email
         self::initTable(PM::T_APICLIENTS); # 2025-09-19 b_logging
         self::initTable(PM::T_APILOG); # 2025-09-18 мониторинг-лог API вызовов
+        self::initTable(PM::T_SESARHIV); # 2025-10-09 архив ПЭП кодов
+        self::initTable(PM::T_CLIENTS); # full adr
+        self::upgradeRoles('_global_'); # 2025-10-10 - список "глобальных" ролей (комплаенс, ИБ)
+        if(class_exists('finmonitor'))
+            self::initTable(finmonitor::T_WHITELIST);
+
+        self::initTable(PM::T_CHATBOT_HIST); # 2025-12-17 таблицы для чат-бота
+        self::initTable(PM::T_CHATBOT_CONTEXTS); # 2025-12-17
+
         self::footer();
     }
 

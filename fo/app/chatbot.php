@@ -86,21 +86,17 @@ document.getElementById('chat-form').addEventListener('submit', async function(e
     messagesDiv.innerHTML += '<p><strong>Вы:</strong><br>' + userInput + '</p>';
 
     // Send message to server
-    /*
-    $.post("./?p=chatbot&action=request",{},function(data) {
-        showMessage('Внимание!',data, 'div_outline');
-    });
-    */
     var response = await fetch('./?p=chatbot&action=request', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: userInput })
     });
-    console.log(response);
+    // console.log(response);
     var data = await response.json();
     console.log(data);
     messagesDiv.innerHTML += '<p><strong>$botname:</strong><br>'+ data.reply + '</p>';
     $(window).scrollTop(32000);
+    $("#btn_context").addClass("hideme");
     // Clear input
     // document.getElementById('user-input').value = '';
     $("#user-input").val('');
@@ -110,6 +106,7 @@ chatBot = {
   backend: "./?p=chatbot",
   clearChatHistory: function() {
     $("#messages").html("");
+    $("#btn_context").removeClass("hideme");
     asJs.sendRequest(chatBot.backend,{action:"resetHistory"}, true);
   },
   selectContext: function() {
@@ -143,7 +140,10 @@ EOHTM;
         $input = @json_decode($fromClient, true);
         # writeDebugInfo("decoded: ", $input);
         $userMessage = $input['message'] ?? 'no text';
+
         $aiInstance = \libs\AiBus::init(self::$engine);
+        if(!is_object($aiInstance)) exit("Error crearting wrapper object for ".self::$engine);
+
         $arHist = self::getChatChain();
         # TODO: сформировать цепочку контекста с предыдущими вопросами-ответами + текущий запрос
         $context = (empty($_SESSION['chatbot_context']) ? '' : self::getContext($_SESSION['chatbot_context']));
@@ -230,6 +230,14 @@ EOHTM;
                'singlerow'=>1, 'associative'=>0
               ]);
         return $ret;
+    }
+    # AJAX запрос на зачистку всей истории запросов
+    public static function clearChatHistory() {
+        if(SuperAdminMode()) {
+            \AppEnv::$db->sql_query("truncate table ".self::T_CHATBOT_HIST);
+            exit('1');
+        }
+        exit('1' . AjaxResponse::showError('Вам сюда нельзя!'));
     }
 }
 
