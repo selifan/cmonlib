@@ -18,7 +18,13 @@ class AiBus {
         $loname = strtolower($engine);
         $aiClass = "\\libs\\aiengines\\$loname";
         if(is_file(__DIR__ . "/aiengines/$loname.php")) {
-            self::$engineInstance = new $aiClass();
+            try {
+                self::$engineInstance = new $aiClass();
+            }
+            catch(Exception $e) {
+                writeDebugInfo("new $aiClass Exception raised: ' . $e->getMessage()");
+            }
+
         }
         else {
             self::$engineInstance = NULL;
