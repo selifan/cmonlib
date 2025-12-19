@@ -91,9 +91,10 @@ document.getElementById('chat-form').addEventListener('submit', async function(e
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: userInput })
     });
-    // console.log(response);
+    console.log(response);
     var data = await response.json();
-    console.log(data);
+    // var data = await response.body;
+    console.log("data:", data);
     messagesDiv.innerHTML += '<p><strong>$botname:</strong><br>'+ data.reply + '</p>';
     $(window).scrollTop(32000);
     $("#btn_context").addClass("hideme");
@@ -151,7 +152,6 @@ EOHTM;
         # writeDebugInfo("response from LLM: ", $response);
         self::saveRequest($userMessage, $response);
         $jsonResponse = json_encode( ['reply'=>$response], JSON_UNESCAPED_UNICODE);
-        # TODO: сохранить вопрос-ответ в истории
         exit($jsonResponse);
     }
     public static function resetHistory() {
