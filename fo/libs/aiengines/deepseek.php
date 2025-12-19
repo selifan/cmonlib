@@ -22,19 +22,20 @@ class DeepSeek {
     ];
     private $context = '';
     private $openAiHelper = NULL;
+
     public function __construct() {
+        $basename = strtolower(__CLASS__);
+        if($cfgVal = \AppEnv::getConfigValue("ai_{$basename}_apikey")) $this->config['apiKey'] = $cfgVal;
+        if($cfgVal = \AppEnv::getConfigValue("ai_{$basename}_baseurl")) $this->config['baseUrl'] = $cfgVal;
+        if($cfgVal = \AppEnv::getConfigValue("ai_{$basename}_temperature")) $this->config['Temperature'] = $cfgVal;
+        if($cfgVal = \AppEnv::getConfigValue("ai_{$basename}_model")) $this->config['Model'] = $cfgVal;
+        if($cfgVal = \AppEnv::getConfigValue("ai_{$basename}_maxtokens")) $this->config['maxTokens'] = $cfgVal;
 
-        if($cfgVal = \AppEnv::getConfigValue('ai_deepseek_apikey')) $this->config['apiKey'] = $cfgVal;
-        if($cfgVal = \AppEnv::getConfigValue('ai_deepseek_baseurl')) $this->config['baseUrl'] = $cfgVal;
-        if($cfgVal = \AppEnv::getConfigValue('ai_deepseek_temperature')) $this->config['Temperature'] = $cfgVal;
-        if($cfgVal = \AppEnv::getConfigValue('ai_deepseek_model')) $this->config['Model'] = $cfgVal;
-        if($cfgVal = \AppEnv::getConfigValue('ai_deepseek_maxtokens')) $this->config['maxTokens'] = $cfgVal;
-
-        $cfgFile = \AppEnv::getAppFolder('cfg/') . 'openai-deepseek.php';
+        $cfgFile = \AppEnv::getAppFolder('cfg/') . "openai-$basename.php";
         if(is_file($cfgFile))
             $this->loadConfig($cfgFile);
 
-        $this->openAiHelper = new \Libs\OpenAI($this->config);
+        $this->openAiHelper = new OpenAI($this->config); # /libs/aiengines/openai.php
     }
     public function loadConfig($cfgName) {
         $arCfg = include($cfgName);
@@ -56,7 +57,7 @@ class DeepSeek {
     /**
     * вернет список моделей, доступных для использования
     */
-    public static function modelList() {
+    public function modelList() {
         $arModels = $this->openAiHelper->modelList();
         return $arModels;
     }
