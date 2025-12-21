@@ -1136,9 +1136,7 @@ EOSQL;
         self::initTable(PM::T_APILOG); # 2025-09-18 мониторинг-лог API вызовов
         self::initTable(PM::T_SESARHIV); # 2025-10-09 архив ПЭП кодов
         self::initTable(PM::T_CLIENTS); # full adr
-        self::upgradeRoles('_global_'); # 2025-10-10 - список "глобальных" ролей (комплаенс, ИБ)
-        if(class_exists('finmonitor'))
-            self::initTable(finmonitor::T_WHITELIST);
+        # self::upgradeRoles('_global_'); # 2025-10-10 - список "глобальных" ролей (комплаенс, ИБ)
 
         self::initTable(PM::T_CHATBOT_HIST); # 2025-12-17 таблицы для чат-бота
         self::initTable(PM::T_CHATBOT_CONTEXTS); # 2025-12-17

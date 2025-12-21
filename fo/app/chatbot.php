@@ -4,11 +4,12 @@
 * modified 2025-12-17
 */
 class ChatBot {
-    static $engine = 'stub';
+    static $engine = 'lmstudio'; # deepseek | stub | openrouter | lmstudio
     static $botName = 'Чат-бот'; # что будет видно в заголовках ответов
     static $userChatSession = '';
     const T_CHATBOT_HIST = 'chatbot_hist';
     const T_CHATBOT_CONTEXTS = 'chatbot_contexts';
+    static $debug = 1;
 
     public static function init() {
         if(empty(self::$userChatSession) || empty($_SESSION['chat_user_session'])) {
@@ -61,6 +62,7 @@ class ChatBot {
             $strContext = "Контекст:" . self::getContextName($curContextId);
         }
         else $strContext = 'Контекст не задан';
+        $additionCode = self::getAdditionCode();
         $html = <<< EOHTM
 <h1>$pagetitle ($engine) $btnContext</h1>
 <div id="cur_context" class="bordered msg_ok" style="position:fixed; z-index:50000; top:10px; right:20px; width:auto">$strContext</div>
@@ -70,16 +72,16 @@ class ChatBot {
         Введите вопрос<br>
         <textarea id="user-input"  required="required" class="form-control" style="height:100px;overflow:auto"></textarea>
         <br>
-        <button type="submit" class="btn btn-primary w200" m-2>Отправить запрос</button>
+        <button type="submit" id="btn_request" class="btn btn-primary w200" m-2>Отправить запрос</button>
         <button type="button" id="btn_reset_chat" class="btn btn-primary w200 m-2" onclick="chatBot.clearChatHistory()" disabled="disabled">(новый чат)</button>
     </form>
 </div>
-
+$additionCode
 <script>
-
 document.getElementById('chat-form').addEventListener('submit', async function(e) {
     e.preventDefault();
     var userInput = $("#user-input").val();
+    // $("#btn_request").attr("disabled",true).html("Машина думает...");
     const messagesDiv = document.getElementById('messages');
 
     // Add user message to chat
@@ -91,16 +93,20 @@ document.getElementById('chat-form').addEventListener('submit', async function(e
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: userInput })
     });
-    console.log(response);
+    // console.log(response);
     var data = await response.json();
     // var data = await response.body;
-    console.log("data:", data);
-    messagesDiv.innerHTML += '<p><strong>$botname:</strong><br>'+ data.reply + '</p>';
+    // console.log("data:", data);
+    var divid = 'response_'+ Math.floor(Math.random() * 999999999);
+    messagesDiv.innerHTML += '<p><strong>$botname:</strong></p><div class="airesponse" id="'+divid+'">'+'</div>'; // data.reply
+    renderMarkdown(data.reply, "#"+divid);
     $(window).scrollTop(32000);
     $("#btn_context").addClass("hideme");
     // Clear input
     // document.getElementById('user-input').value = '';
     $("#user-input").val('');
+    $("#btn_request").attr("disabled",false).html("Отправить запрос");
+
     $("#btn_reset_chat").attr("disabled", false);
 });
 chatBot = {
@@ -137,22 +143,78 @@ EOHTM;
         self::init();
         # writeDebugInfo("my session: ", self::$userChatSession);
         $fromClient = file_get_contents('php://input');
-        # writeDebugInfo("raw request: ", $fromClient);
+        if(self::$debug) writeDebugInfo("raw request: ", $fromClient);
         $input = @json_decode($fromClient, true);
-        # writeDebugInfo("decoded: ", $input);
-        $userMessage = $input['message'] ?? 'no text';
+        $userMessage = $input['message'] ?? '';
+        if(self::$debug) writeDebugInfo("user message[$userMessage]: full unput: ", $input);
 
+        if(empty($userMessage)) $predefined = 'Передан пустой запрос!';
+        else $predefined = self::checkPredefinedReplies($userMessage);
+
+        if(!empty($predefined)) {
+            $jsonResponse = json_encode( ['reply'=>$predefined], JSON_UNESCAPED_UNICODE);
+            exit($jsonResponse);
+        }
         $aiInstance = \libs\AiBus::init(self::$engine);
-        if(!is_object($aiInstance)) exit("Error crearting wrapper object for ".self::$engine);
-
+        if(self::$debug) writeDebugInfo("created AI instance: ", $aiInstance);
+        if(!is_object($aiInstance)) {
+            $err = \libs\AiBus::getErrorMEssage();
+            $jsonResponse = json_encode( ['reply'=>$err], JSON_UNESCAPED_UNICODE);
+            exit($jsonResponse);
+        }
+        if(!is_object($aiInstance)) {
+            if(self::$debug) writeDebugInfo("Ошибка создания AI объекта ", self::$engine);
+            $err = "Error crearting wrapper object for ".self::$engine;
+            $jsonResponse = json_encode( ['reply'=>$err], JSON_UNESCAPED_UNICODE);
+            exit($jsonResponse);
+        }
+        if($userMessage === '@models') {
+            writeDebugInfo("@models KT-000");
+            $result = $aiInstance->modelList();
+            if(is_array($result)) $result = 'Models: <pre>'.print_r($result,1).'</pre>';
+            $jsonResponse = json_encode( ['reply'=>$result], JSON_UNESCAPED_UNICODE);
+            writeDebugInfo("models to send... ");
+            exit($jsonResponse);
+        }
         $arHist = self::getChatChain();
-        # TODO: сформировать цепочку контекста с предыдущими вопросами-ответами + текущий запрос
+        #  формирую цепочку контекста = стартовый контекст + предыдущие вопросы-ответы + текущий запрос
         $context = (empty($_SESSION['chatbot_context']) ? '' : self::getContext($_SESSION['chatbot_context']));
         $response = $aiInstance->request($userMessage, $arHist, $context); # will create echo and exits!
         # writeDebugInfo("response from LLM: ", $response);
         self::saveRequest($userMessage, $response);
         $jsonResponse = json_encode( ['reply'=>$response], JSON_UNESCAPED_UNICODE);
         exit($jsonResponse);
+    }
+
+    public static function checkPredefinedReplies($request) {
+        $ret = FALSE;
+        if($request === '@lastresponse') {
+            # повторяю прошлый ответ без запросов в AI агента
+            $chatSession = $_SESSION['chat_user_session'] ?? '';
+            if(!empty($chatSession)) $ret = 'Сессия не стартована';
+            else {
+                $ret = self::getLastResponse();
+            }
+        }
+        elseif(substr($request,0,5) === '@test') {
+            $testBody = 'chat-test';
+            $postfix = substr($request,6);
+            if($postfix) $testBody .= $postfix;
+            $testResponse = AppEnv::getAppFolder('libs/aiengines/testpages/') . "test{$postfix}.md";
+            if(is_file($testResponse)) $ret = file_get_contents($testResponse);
+            else $ret = "Тестовая страница $testResponse не найдена";
+        }
+        if(self::$debug) writeDebugInfo("checkPredefinedReplies returns: [$ret]");
+        return $ret;
+    }
+
+    public static function getLastResponse() {
+        $chatSession = $_SESSION['chat_user_session'] ?? '';
+        if(empty($chatSession)) return 'Чат-сессия не стартована! сессия:<br>'.print_r($_SESSION);
+        $arData = \AppEnv::$db->select(self::T_CHATBOT_HIST,
+          ['where'=>['chatsession_id'=>$chatSession], 'orderby'=>'id desc','singlerow'=>1]
+        );
+        return $arData['response'] ?? 'Ответов в сессии <b>$chatSession</b> еще не сохранено!';
     }
     public static function resetHistory() {
         # TODO: сброс накопленного контекста, стартую новый чат
@@ -173,6 +235,8 @@ EOHTM;
 
     # сохраняю в истории чата выполненный запрос
     public static function saveRequest($request, $response) {
+        if($response === '{no-answer}') return 0;
+        if(mb_substr($response, 0,8,'UTF-8')==='{ERROR}:') return 0;
         $arData = [
           'userid' => AppEnv::getUserId(),
           'chatsession_id'=> self::$userChatSession,
@@ -181,7 +245,8 @@ EOHTM;
           'response' => $response,
         ];
         $result = \AppEnv::$db->insert(self::T_CHATBOT_HIST, $arData);
-        # writeDebugInfo("add record result: ", $result, " sql-err:", \AppEnv::$db->sql_error(), " SQL:", \AppEnv::$db->getLastQuery());
+        if($dqlErr=\AppEnv::$db->sql_error())
+          writeDebugInfo("save request error : ", $result, " sql-err:", \AppEnv::$db->sql_error(), "\n SQL:", \AppEnv::$db->getLastQuery());
         return $result;
     }
     # AJAX запрос на выбор/ввод нового контекста
@@ -239,10 +304,84 @@ EOHTM;
         }
         exit('1' . AjaxResponse::showError('Вам сюда нельзя!'));
     }
-}
 
-$action = AppEnv::$_p['action'] ?? 'form';
-if(!empty($action)) {
-    if(class_exists('ChatBot', $action)) ChatBot::$action();
-    else exit("ERROR: No action $action in ChatBot");
+    # код для страницы чат-бота, с подключением парсеров markdown, mermaid (Маша-GPT дала...)
+    public static function getAdditionCode() {
+        $code = <<< EOJS
+<script src="js/markdown-it.min.js"></script>
+<script src="js/purify.min.js"></script>
+<script src="js/mermaid.min.js"></script>
+<style>
+      /* минимальные стили */
+      .mermaid-placeholder { background:#f8f8f8; padding:8px; border-radius:4px; }
+      pre { background:#f0f0f0; padding:8px; border-radius:4px; overflow:auto; }
+      div.airesponse { background-color: #c8c8c8; border: 1pz solid aaa; pasdding: 1em; }
+      td,th { border:1px solid #a0a0a0; padding: 0.2em 1em;}
+      th { background-color: #eee; }
+</style>
+<script>
+// Инициализация
+// $(document).ready(function() {
+  const md = window.markdownit({ html: false, linkify: true, typographer: true });
+  mermaid.initialize({ startOnLoad: false });
+// });
+
+  // Экранировать для fallback
+function escapeHtml(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+  // Основная функция: принимает Markdown (string) и контейнер (DOM element or selector)
+async function renderMarkdown(markdown, container = '#output') {
+    const root = (typeof container === 'string') ? document.querySelector(container) : container;
+    if (!root) throw new Error('container not found');
+
+    // Собираем mermaid блоки и заменяем на placeholder
+    const mermaidBlocks = [];
+    const replaced = markdown.replace(/```mermaid\\s*([\\s\\S]*?)```/g, (m, code) => {
+      const id = 'mermaid-' + mermaidBlocks.length + '-' + Date.now().toString(36);
+      mermaidBlocks.push({ id, code: code.trim() });
+      return `<div class="mermaid-placeholder" data-mermaid-id="\${id}">Rendering mermaid diagram…</div>`;
+    });
+
+    // Рендерим остальной Markdown в HTML (без raw HTML)
+    const unsafeHtml = md.render(replaced);
+    // Санитизируем
+    const safeHtml = DOMPurify.sanitize(unsafeHtml);
+    // Вставляем
+    root.innerHTML = safeHtml;
+
+    // Отрисовываем mermaid блоки
+    for (const blk of mermaidBlocks) {
+      const placeholder = root.querySelector(`[data-mermaid-id="\${blk.id}"]`);
+      if (!placeholder) continue;
+      try {
+        // mermaid.mermaidAPI.render => возвращает svg в callback
+        // Обёртка в Promise для удобства
+        await new Promise((resolve, reject) => {
+          mermaid.mermaidAPI.render(blk.id, blk.code, (svgCode) => {
+            // Вставляем SVG вместо placeholder
+            placeholder.outerHTML = svgCode;
+            resolve();
+          }, placeholder);
+          // небольшая таймаут-защита
+          setTimeout(() => reject(new Error('mermaid render timeout')), 5000);
+        });
+      } catch (e) {
+        // fallback: показать исходный код
+        placeholder.outerHTML = `<pre><code>\${escapeHtml(blk.code)}</code></pre>`;
+        console.error('mermaid render error', e);
+      }
+    }
+}
+</script>
+EOJS;
+        # file_put_contents('tmp/_mermaid-code.htm', $code); # to check correct $ char escapings
+        return $code;
+    }
+}
+if(!isAjaxCall()) {
+    $action = AppEnv::$_p['action'] ?? 'form';
+    if(!empty($action)) {
+        if(class_exists('ChatBot', $action)) ChatBot::$action();
+        else exit("ERROR: No action $action in ChatBot");
+    }
 }
