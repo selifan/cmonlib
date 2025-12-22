@@ -7,7 +7,7 @@
 * Пример: https://b.deepseek3.ru/create-chat-completion/
 */
 return [
-  'baseUrl' => 'https://api.deepseek.com/v3', # URL вызова AI провайдера
+  'baseUrl' => 'https://api.deepseek.com/v1/', # URL вызова AI провайдера
   'apiKey' => 'YOUR_API_KEY', # deepsek API key
   'Temperature' => 0.5,
   'Model' => 'deepseek-chat-33b', # gpt-4-turbo

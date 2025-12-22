@@ -1,14 +1,17 @@
 <?php
 /**
 * страница чат-бот (юзает libs/aibus.php
-* modified 2025-12-17
+* modified 2025-12-21
 */
 class ChatBot {
-    static $engine = 'lmstudio'; # deepseek | stub | openrouter | lmstudio
+    static $engine = 'stub'; # deepseek | stub | openrouter | lmstudio | gigachat | routerairu
     static $botName = 'Чат-бот'; # что будет видно в заголовках ответов
     static $userChatSession = '';
+
     const T_CHATBOT_HIST = 'chatbot_hist';
     const T_CHATBOT_CONTEXTS = 'chatbot_contexts';
+    static $parseMermaid = 1; # подключать ли парсер mermaid диаграмм в MarkDown контенте
+    static $mermaid_theme = 'default'; # default | neutral | dark | forest | base
     static $debug = 1;
 
     public static function init() {
@@ -54,6 +57,12 @@ class ChatBot {
         self::init();
         $pagetitle = "Чат-бот";
         \AppEnv::setPageTitle($pagetitle);
+        UseJsModules('js/markdown-it.min.js');
+        // UseJsModules('js/purify.min.js');
+
+        UseJsModules('js/mermaid.min.js');
+        UseJsModules('js/chatbot-helper.js'); # Динамичкский парсер markdown + mermaid для ответов от ИИ
+
         $botname = self::$botName;
         $engine = self::$engine;
         $btnContext = "<button class=\"btn btn-primary\" id=\"btn_context\" onclick=\"chatBot.selectContext()\">Задать контекст</button>";
@@ -64,6 +73,7 @@ class ChatBot {
         else $strContext = 'Контекст не задан';
         $additionCode = self::getAdditionCode();
         $html = <<< EOHTM
+$additionCode
 <h1>$pagetitle ($engine) $btnContext</h1>
 <div id="cur_context" class="bordered msg_ok" style="position:fixed; z-index:50000; top:10px; right:20px; width:auto">$strContext</div>
 <div id="chat">
@@ -76,7 +86,6 @@ class ChatBot {
         <button type="button" id="btn_reset_chat" class="btn btn-primary w200 m-2" onclick="chatBot.clearChatHistory()" disabled="disabled">(новый чат)</button>
     </form>
 </div>
-$additionCode
 <script>
 document.getElementById('chat-form').addEventListener('submit', async function(e) {
     e.preventDefault();
@@ -85,7 +94,7 @@ document.getElementById('chat-form').addEventListener('submit', async function(e
     const messagesDiv = document.getElementById('messages');
 
     // Add user message to chat
-    messagesDiv.innerHTML += '<p><strong>Вы:</strong><br>' + userInput + '</p>';
+    messagesDiv.innerHTML += '<p><strong>Вы:</strong><div class="chat-user-request">' + userInput + '</div>';
 
     // Send message to server
     var response = await fetch('./?p=chatbot&action=request', {
@@ -97,9 +106,12 @@ document.getElementById('chat-form').addEventListener('submit', async function(e
     var data = await response.json();
     // var data = await response.body;
     // console.log("data:", data);
-    var divid = 'response_'+ Math.floor(Math.random() * 999999999);
-    messagesDiv.innerHTML += '<p><strong>$botname:</strong></p><div class="airesponse" id="'+divid+'">'+'</div>'; // data.reply
-    renderMarkdown(data.reply, "#"+divid);
+    var divchat = $('#messages');
+
+    MermaidMarkdown.addMessage(divchat, data.reply, 'from-bot').then(function($msg){
+      console.log('Message added', $msg);
+    });
+
     $(window).scrollTop(32000);
     $("#btn_context").addClass("hideme");
     // Clear input
@@ -152,37 +164,49 @@ EOHTM;
         else $predefined = self::checkPredefinedReplies($userMessage);
 
         if(!empty($predefined)) {
-            $jsonResponse = json_encode( ['reply'=>$predefined], JSON_UNESCAPED_UNICODE);
+            $jsonResponse = json_encode( ['reply'=>$predefined], (JSON_UNESCAPED_UNICODE));
+            # $jsonResponse = json_encode( ['reply'=>$predefined], (JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+            # $jsonResponse = strtr($jsonResponse, ['\\r'=>'\\\\r', '\\n'=>'\\\\n']);
+            # $jsonResponse = strtr($jsonResponse, ['\\r'=>"\r", "\\n"=>"\n"]);
+            writeDebugInfo("predefined response with saved CR LF: ", $jsonResponse);
             exit($jsonResponse);
         }
         $aiInstance = \libs\AiBus::init(self::$engine);
         if(self::$debug) writeDebugInfo("created AI instance: ", $aiInstance);
         if(!is_object($aiInstance)) {
             $err = \libs\AiBus::getErrorMEssage();
-            $jsonResponse = json_encode( ['reply'=>$err], JSON_UNESCAPED_UNICODE);
+            $jsonResponse = json_encode( ['reply'=>$err], (JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
             exit($jsonResponse);
         }
         if(!is_object($aiInstance)) {
             if(self::$debug) writeDebugInfo("Ошибка создания AI объекта ", self::$engine);
             $err = "Error crearting wrapper object for ".self::$engine;
-            $jsonResponse = json_encode( ['reply'=>$err], JSON_UNESCAPED_UNICODE);
+            $jsonResponse = json_encode( ['reply'=>$err], (JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
             exit($jsonResponse);
         }
-        if($userMessage === '@models') {
-            writeDebugInfo("@models KT-000");
-            $result = $aiInstance->modelList();
+
+        $request = \RusUtils::mb_trim($userMessage);
+        $parts = preg_split("/[ ,]+/", $request, -1, PREG_SPLIT_NO_EMPTY);
+
+        $command = array_shift($parts);
+
+        if($command === '@models') {
+            $result = $aiInstance->modelList($parts);
             if(is_array($result)) $result = 'Models: <pre>'.print_r($result,1).'</pre>';
-            $jsonResponse = json_encode( ['reply'=>$result], JSON_UNESCAPED_UNICODE);
-            writeDebugInfo("models to send... ");
+            $jsonResponse = json_encode( ['reply'=>$result], (JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
             exit($jsonResponse);
         }
+
+        $tmp =(__FILE__ . '/'.__LINE__." $command<pre>" . print_r($parts,1) . '</pre>');
+        exit (json_encode( ['reply'=>$tmp], (JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)) );
+
         $arHist = self::getChatChain();
         #  формирую цепочку контекста = стартовый контекст + предыдущие вопросы-ответы + текущий запрос
         $context = (empty($_SESSION['chatbot_context']) ? '' : self::getContext($_SESSION['chatbot_context']));
         $response = $aiInstance->request($userMessage, $arHist, $context); # will create echo and exits!
         # writeDebugInfo("response from LLM: ", $response);
         self::saveRequest($userMessage, $response);
-        $jsonResponse = json_encode( ['reply'=>$response], JSON_UNESCAPED_UNICODE);
+        $jsonResponse = json_encode( ['reply'=>$response], (JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
         exit($jsonResponse);
     }
 
@@ -245,8 +269,11 @@ EOHTM;
           'response' => $response,
         ];
         $result = \AppEnv::$db->insert(self::T_CHATBOT_HIST, $arData);
-        if($dqlErr=\AppEnv::$db->sql_error())
-          writeDebugInfo("save request error : ", $result, " sql-err:", \AppEnv::$db->sql_error(), "\n SQL:", \AppEnv::$db->getLastQuery());
+        if($dqlErr=\AppEnv::$db->sql_error()) {
+            $dttime = date('Ymd-His');
+            @file_put_contents("tmp/_response-saveerr-$dttime.log", $response);
+            writeDebugInfo("save request error : ", $result, " sql-err:", \AppEnv::$db->sql_error(), "\n SQL:", \AppEnv::$db->getLastQuery());
+        }
         return $result;
     }
     # AJAX запрос на выбор/ввод нового контекста
@@ -307,71 +334,25 @@ EOHTM;
 
     # код для страницы чат-бота, с подключением парсеров markdown, mermaid (Маша-GPT дала...)
     public static function getAdditionCode() {
+        $theme = self::$mermaid_theme;
+        $initMermaid = (self::$parseMermaid) ? "MermaidMarkdown.init({ mermaidConfig: { theme: '$theme' } });" : 'mermaid=false;';
         $code = <<< EOJS
-<script src="js/markdown-it.min.js"></script>
-<script src="js/purify.min.js"></script>
-<script src="js/mermaid.min.js"></script>
+<!-- script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs" /script -->
 <style>
       /* минимальные стили */
       .mermaid-placeholder { background:#f8f8f8; padding:8px; border-radius:4px; }
-      pre { background:#f0f0f0; padding:8px; border-radius:4px; overflow:auto; }
-      div.airesponse { background-color: #c8c8c8; border: 1pz solid aaa; pasdding: 1em; }
+      pre { padding:8px; border-radius:4px; overflow:auto; }
+      div.from-bot { background-color: #fafafa; border: 1px solid #aaa; padding: 1em; border-radius: 6px; margin-bottom:6px;}
+      div.chat-user-request { background-color: #f9f9f9; border: 1px solid #aaa; padding: 1em; border-radius: 6px; margin-bottom:6px;}
+
       td,th { border:1px solid #a0a0a0; padding: 0.2em 1em;}
       th { background-color: #eee; }
 </style>
 <script>
 // Инициализация
-// $(document).ready(function() {
-  const md = window.markdownit({ html: false, linkify: true, typographer: true });
-  mermaid.initialize({ startOnLoad: false });
-// });
-
-  // Экранировать для fallback
-function escapeHtml(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
-
-  // Основная функция: принимает Markdown (string) и контейнер (DOM element or selector)
-async function renderMarkdown(markdown, container = '#output') {
-    const root = (typeof container === 'string') ? document.querySelector(container) : container;
-    if (!root) throw new Error('container not found');
-
-    // Собираем mermaid блоки и заменяем на placeholder
-    const mermaidBlocks = [];
-    const replaced = markdown.replace(/```mermaid\\s*([\\s\\S]*?)```/g, (m, code) => {
-      const id = 'mermaid-' + mermaidBlocks.length + '-' + Date.now().toString(36);
-      mermaidBlocks.push({ id, code: code.trim() });
-      return `<div class="mermaid-placeholder" data-mermaid-id="\${id}">Rendering mermaid diagram…</div>`;
-    });
-
-    // Рендерим остальной Markdown в HTML (без raw HTML)
-    const unsafeHtml = md.render(replaced);
-    // Санитизируем
-    const safeHtml = DOMPurify.sanitize(unsafeHtml);
-    // Вставляем
-    root.innerHTML = safeHtml;
-
-    // Отрисовываем mermaid блоки
-    for (const blk of mermaidBlocks) {
-      const placeholder = root.querySelector(`[data-mermaid-id="\${blk.id}"]`);
-      if (!placeholder) continue;
-      try {
-        // mermaid.mermaidAPI.render => возвращает svg в callback
-        // Обёртка в Promise для удобства
-        await new Promise((resolve, reject) => {
-          mermaid.mermaidAPI.render(blk.id, blk.code, (svgCode) => {
-            // Вставляем SVG вместо placeholder
-            placeholder.outerHTML = svgCode;
-            resolve();
-          }, placeholder);
-          // небольшая таймаут-защита
-          setTimeout(() => reject(new Error('mermaid render timeout')), 5000);
-        });
-      } catch (e) {
-        // fallback: показать исходный код
-        placeholder.outerHTML = `<pre><code>\${escapeHtml(blk.code)}</code></pre>`;
-        console.error('mermaid render error', e);
-      }
-    }
-}
+$(document).ready(function() {
+  MermaidMarkdown.init({ mermaidConfig: { theme: 'default' } });
+});
 </script>
 EOJS;
         # file_put_contents('tmp/_mermaid-code.htm', $code); # to check correct $ char escapings

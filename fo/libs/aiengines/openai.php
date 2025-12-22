@@ -13,6 +13,7 @@ namespace Libs\aiengines;
 
 class OpenAI {
     private $providerName = '';
+    private $engineId = '';
     private $apiKey = '';
     private $baseUrl = '';
     private $Temperature = 0.7;
@@ -23,20 +24,32 @@ class OpenAI {
     private $errorMessage = '';
     private $headers = [];
     private $debug = 1;
+    static $textLimit = 512; # ограпничитель текстовых значений в колонках models
 
     public function __construct($config=FALSE) {
         if(!empty($config)) $this->loadConfig($config);
     }
     public function makeHeaders() {
+        if(!empty($this->confg['OauthUrl'])) {
+            $apiKey = $this->getApiKey();
+            if(empty($apiKey)) {
+                writeDebugInfo("no apiToken after OAuth request, ", $apiKey);
+                exit("Oauth return - no apiToken !");
+            }
+        }
+        else $apiKey = $this->apiKey;
+
         $this->headers = [];
+
         if(!empty($this->apiKey))
-            $this->headers['Authorization'] = 'Bearer ' . $this->apiKey;
+            $this->headers['Authorization'] = 'Bearer ' . $apiKey;
 
         $this->headers['Content-Type'] = 'application/json';
     }
 
     public function loadConfig($cfg='') {
         $arCfg = [];
+        if(is_string($cfg)) $this->engineId = $cfg;
         if($this->debug) writeDebugInfo("loadConfig($cfg)...");
         if(is_string($cfg)) {
             if(strpos($cfg, '.php')===FALSE) # передано только имя настройки
@@ -44,7 +57,7 @@ class OpenAI {
             else
                 $cfgFile = $cfg;
 
-            if($this->debug) writeDebugInfo("cfgFile: [$cfgFile]");
+            if($this->debug>1) writeDebugInfo("cfgFile: [$cfgFile]");
 
             if(!is_file($cfgFile)) {
                 if($this->debug) writeDebugInfo("Exiting with No cfgFile");
@@ -75,24 +88,47 @@ class OpenAI {
         $this->context = $context;
         return $this;
     }
+    # при наличии настройки OauthUrl перед любым запроосом надо авторизоваться по OAuth и получить ключ!
+    public function getApiKey() {
+        $headers = [
+          'Content-Type' => 'application/x-www-form-urlencoded',
+          'Accept' => 'application/json',
+          'Authorization' => 'Basic '.$this->confg['apiKey'],
+          'RqUID' => self::generateGUID(),
+        ];
+
+        $response = \Curla::getFromUrl($this->confg['OauthUrl'],FALSE,30,$headers);
+        $arResponse = @json_decode($response, TRUE);
+        writeDebugInfo("Oauth response: ", $response, " as array: ", $arResponse);
+        $ret = $arResponse['access_token'] ?? FALSE;
+        return $ret;
+    }
+    # Сьеру подавай GUID, мля.
+    public static function generateGUID() {
+        $ret = dechex(rand(hexdec('10000000'),hexdec('ffffffff')))
+          . '-' . dechex(rand(hexdec('1000'),hexdec('ffff')))
+          . '-' . dechex(rand(hexdec('1000'),hexdec('ffff')))
+          . '-' . dechex(rand(hexdec('1000'),hexdec('ffff')))
+          . '-' . dechex(rand(hexdec('100000000000'),hexdec('ffffffffffff')))
+          ;     # 85995b73-a3bc-7bff-d2b2-7b367befe771
+        return $ret;
+    }
     public function request($request, $arHist = [], $context = '') {
 
         if(empty($request)) return 'Empty request string!';
         if(!empty($context)) $this->context = $context;
-        if($request === '@models') {
-            $result = $this->modelList();
-            writeDebugInfo("model list returned: ", $result);
+        /*
+        $request = \RusUtils::mb_trim($request);
+        $parts = preg_split("/[ \s/]/", $request);
+        array_shift($parts);
+        if($parts[0] === '@models') {
+            $result = $this->modelList($parts);
+            # writeDebugInfo("model list returned: ", $result);
             return "models:<pre>". print_r($result, 1) . '</pre>';
         }
-        $this->makeHeaders();
-        /*
-        $headers = [
-          'Authorization' => 'Bearer ' . $this->apiKey,
-          'Content-Type' => 'application/json',
-          # 'HTTP-Referer' => 'My Site URL',
-          # "X-Title": "<YOUR_SITE_NAME>"
-        ];
         */
+        $this->makeHeaders();
+
         $messages = [];
         if(!empty($this->context)) # задаю стартовый контекст/роль ассистента
             $messages[] = [ 'role'=>'system', 'content' => $this->context ];
@@ -126,6 +162,7 @@ class OpenAI {
                 writeDebugInfo("calling $chatUrl with params, ", $postFields, " headers: ", $this->headers);
             }
             $response = \Curla::getFromUrl($chatUrl,$postFields,60,$this->headers, TRUE);
+            $errCode = \Curla::getErrNo();
             $responseData = @json_decode($response, TRUE);
             if($this->debug) {
                 writeDebugInfo("response from AI / JSON: ", $response, "\n as array: ", $responseData);
@@ -155,11 +192,19 @@ class OpenAI {
     }
     /**
     * вернет список моделей, доступных для использования
+    * Формат Markdown !
     */
-    public function modelList() {
+    public function modelList($params = FALSE) {
+
+        $startPos = '';
+        if($params) {
+            $startPos = intval(is_array($params) ? array_shift($params) : $params);
+        }
+        # return "Запрошен список моделей с пропуском " . (string)($startPos);
+
         $limit = 40;
         # Включать только эти колонки:
-        $colNames = ['id','name', 'owned_by', 'description'];
+        $colNames = ['id','name', 'owned_by', 'context_length','description'];
         $this->makeHeaders();
         $fmt = 'md';
         if(!empty($this->confg['modelsUrl']))
@@ -172,44 +217,58 @@ class OpenAI {
         try {
             $response = \Curla::getFromUrl($url,FALSE,30,$this->headers,2);
             if($this->debug) writeDebugInfo("/models request response: ", $response);
-            $responseData = @json_decode($response, true);
-            if(!empty($responseData['error'])) $result = $responseData['error'];
+            if(is_array($response)) $responseData = $response;
+            else $responseData = @json_decode($response, true);
+            if(!empty($responseData['error'])) $result = $responseData['errorMessage'] ?? $responseData['error'];
+            elseif(!empty($responseData['status']) && $responseData['status']!='200') {
+                $result = "Service connect error: " . ($responseData['message'] ?? $responseData['status']);
+            }
             else $result = $responseData['data'] ?? $responseData;
+            if($this->debug>1) writeDebugInfo("array with models: ",$result);
         }
-        catch(Exception $e) { $result = $e->getMessage(); }
+        catch(Exception $e) {
+            $result = $e->getMessage();
+            return "ERROR: $result";
+        }
         # writeDebugInfo("result: ", $result);
         $endWarning = '';
-        if(is_array($result)) { # Превращаю массив - список моделей в MarkDown
-            $goodCols = array_intersect($colNames, array_keys($result[0]));
-            $cntCols = count($goodCols);
+        if(is_array($result) && count($result)) { # Превращаю массив - список моделей в MarkDown
+            if(count($result) <= $startPos)
+                $txtOut = "Список пуст или запрошенный пропуск $startPos превышает число элементов в списке";
+            else {
+                $goodCols = array_intersect($colNames, array_keys($result[0]));
+                $cntCols = count($goodCols);
 
-            if($fmt === 'md') {
-                $txtOut = "## Список поддерживаемых моделей\r\n|" . implode(" | ", $goodCols) . "|\r\n";
-                $txtOut .= "|" . str_repeat("---|", $cntCols) . "\r\n";
+                $txtOut = "## Список поддерживаемых моделей\r\n|No|" . implode(" | ", $goodCols) . "|\r\n";
+                $txtOut .= "|" . str_repeat("---|", $cntCols+1) . "\r\n";
+                $count = count($result);
+                $done = 0;
                 foreach($result as $no => $item) {
-                    $txtOut .= "|";
-                    foreach($goodCols as $colid) { $txtOut .= $item[$colid] . "|"; }
+                    if($no < $startPos) continue;
+                    $done++;
+                    $txtOut .= "| ". ($no+1) . " |";
+
+                    foreach($goodCols as $colid) {
+                        $value = strtr($item[$colid], ["\r"=>'',"\n"=>' ', '|'=>' ']);
+                        if(mb_strlen($value, 'UTF-8')> self::$textLimit)
+                            $value = mb_substr($value, 0, self::$textLimit,'UTF-8') . ' ...';
+                        $txtOut .= $value . "|";
+                    }
                     $txtOut  .= "\r\n";
-                    if($no>=($limit-1)) {
-                        $endWarning = "показаны только первые $limit моделей";
+                    if($done>=($limit)) {
+                        $starting = $startPos ? " начиная с $startPos-го" : '';
+                        $endWarning = "показаны только $limit из $count моделей{$starting}, чтобы посмотреть продолжение, укаэите сколько пропустить: **@models 40** ";
                         break;
                     }
                 }
                 if($endWarning) $txtOut .= "\r\n _($endWarning}_";
-                file_put_contents("tmp/_models.txt", $txtOut);
-                return $txtOut;
             }
-            else { # в виде HTML таблицы
-                $txtOut = "<table><thead><tr><th> id </th><th> canonical_slug </th><th> name </th><th> description</th></tr></thead><tbody>";
-                foreach($result as $nom => $item) {
-                    $txtOut .= "<tr><td>$item[id]</td><td>$item[canonical_slug] </td><td> $item[name] </td><td> $item[description]</td></tr>\n";
-                    if($nom>=$limit) break; # слишком много не вывожу!
-                }
-                $txtOut .= "</tbody></table>";
-                file_put_contents("tmp/_models.txt", $txtOut);
-            }
+
+            if($this->debug) file_put_contents("tmp/_models-{$this->engineId}.txt", $txtOut);
+            return $txtOut;
         }
-        if($this->debug) writeDebugInfo("models final result: ", $result);
+        # else $result = 'Возвращен не масив моделей: ';
+        if($this->debug>1) writeDebugInfo("models final result: ", $result);
         return $result;
     }
     public static function getEngineInfo() {

@@ -2,8 +2,8 @@
 /**
 * @name app/ai.engines/stub.php
 * Заглушка для имитации вызовов AI движков
-* @version 0.10.001
-* modified 2025-11-18
+* @version 0.50.001
+* modified 2025-11-21
 **/
 namespace Libs\aiengines;
 class Stub {
@@ -48,5 +48,13 @@ class Stub {
     }
     public static function getEngineInfo() {
         return 'Stub (эмулятор LLM)';
+    }
+    # сделать markdown ответ
+    public function modelList($params = FALSE) {
+        $txtOut = "## Список моделей в STUB\r\n"
+         . "|No|Модель|\r\n|---|---|\r\n";
+        $txtOut .= "| 1 |Чухня полная (зато дёшево)|\r\n";
+        $txtOut .= "| 2 |Чухня не просто полная, а ваще трындец (эта дорогая - 100500 за тыщу токенов)|\r\n";
+        return $txtOut;
     }
 }
