@@ -1,4 +1,4 @@
-# Тест 2 - Короткая схема тестирую mermaid схемы
+# Тест 2 - Тестируем mermaid схемы
 Доки про mermaid: https://github.com/mermaid-js/mermaid/tree/develop/docs
 
 ```mermaid
@@ -10,9 +10,23 @@ flowchart TB
  E --> F[Показ пользователю]
 ```
 
-## Минимальный HTML
-```html
-<i>Тут кусок HTML кода</i>
-<h2> Заголовок типа 2 </h2>
+# Последовательность действий - *sequenceDiagram*
+
+```mermaid
+sequenceDiagram
+    Alice->>John: Hello John, how are you?
+    John-->>Alice: Great!
+    Alice-)John: See you later!
 ```
-Ну вот как-то так!
+
+# Диаграммы Ганнта - *gantt*
+
+```mermaid
+gantt
+    title Project Plan
+    dateFormat  YYYY-MM-DD
+    section Section
+    Task A           :a1, 2024-08-01, 2024-08-10
+    Task B           :after a1  , 10d
+    Task C           :2024-08-11  , 10d
+```
