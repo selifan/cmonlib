@@ -4,7 +4,7 @@
 * modified 2025-12-21
 */
 class ChatBot {
-    static $engine = 'stub'; # deepseek | stub | openrouter | lmstudio | gigachat | routerairu
+    static $engine = 'lmstudio'; # deepseek | stub | openrouter | lmstudio | gigachat | routerairu
     static $botName = 'Чат-бот'; # что будет видно в заголовках ответов
     static $userChatSession = '';
     static $knownActions = [ 'initContextDialog','setActiveContext', 'activateContext' ];
@@ -33,7 +33,7 @@ class ChatBot {
     }
     # готовлю HTML код для диалога выбора контекста
     public static function initContextDialog() {
-        writeDebugInfo("initContextDialog started");
+
         $html = "<div class='p-2'>Выберите один из настроенных контекстов или создайте новый:<form id='fm_chat_setcontext' class='was-validated'>";
         # select from self::T_CHATBOT_CONTEXTS
         $myid = \AppEnv::getUserId();
@@ -169,10 +169,7 @@ EOHTM;
 
         if(!empty($predefined)) {
             $jsonResponse = json_encode( ['reply'=>$predefined], (JSON_UNESCAPED_UNICODE));
-            # $jsonResponse = json_encode( ['reply'=>$predefined], (JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
-            # $jsonResponse = strtr($jsonResponse, ['\\r'=>'\\\\r', '\\n'=>'\\\\n']);
-            # $jsonResponse = strtr($jsonResponse, ['\\r'=>"\r", "\\n"=>"\n"]);
-            writeDebugInfo("predefined response with saved CR LF: ", $jsonResponse);
+            # writeDebugInfo("predefined response with saved CR LF: ", $jsonResponse);
             exit($jsonResponse);
         }
         $aiInstance = \libs\AiBus::init(self::$engine);
@@ -247,6 +244,7 @@ EOHTM;
     public static function resetHistory() {
         # TODO: сброс накопленного контекста, стартую новый чат
         unset($_SESSION['chat_user_session']);
+        unset($_SESSION['chat_conversation_id']); # ID сессии на стороне AI агента (stateful режим)
         self::init();
         exit("1");
     }

@@ -12,6 +12,12 @@
 namespace Libs\aiengines;
 
 class OpenAI {
+    const METHOD_COMPLETIONS  = 'chat/completions';
+    const METHOD_RESPONSES = 'responses';
+
+    private $debug = FALSE;
+    static $saveAllResponses = 1;
+    static $maxProcessSeconds = 300; # timeout для curl (секунды)
     private $providerName = '';
     private $engineId = '';
     private $apiKey = '';
@@ -22,9 +28,12 @@ class OpenAI {
     private $context = '';
     private $confg = [];
     private $errorMessage = '';
+    private $chatMode = 'responses'; # в какой движок делаем чат-запросы: completions | responses
+    // FALSE|TRUE: отправлять ли в chat историю ответов (FALSE = слать только вопросы)
+    // если число NN - это ограничитель: если история сообщений не более NN, отправлять с ответами, если больше - только вопросы
+    private $sendResponseHist = 10;
     private $headers = [];
-    private $debug = 1;
-    static $textLimit = 512; # ограпничитель текстовых значений в колонках models
+    static $textLimit = 512; # ограничитель текстовых значений в колонках models (description например)
 
     public function __construct($config=FALSE) {
         if(!empty($config)) $this->loadConfig($config);
@@ -41,10 +50,24 @@ class OpenAI {
 
         $this->headers = [];
 
-        if(!empty($this->apiKey))
+        if(!empty($this->apiKey)) {
             $this->headers['Authorization'] = 'Bearer ' . $apiKey;
-
+        }
+        elseif(!empty($this->confg['authorization'])) { # псевдо-авторизация с ИД сессии чата
+            $authKey = $this->confg['authorization']; #
+            if(empty($_SESSION['chat_conversation_id'])) {
+                # генерю свой ИД и толкаю его в auth header:
+                $_SESSION['chat_conversation_id'] = 'chat-' . self::generateGUID();
+            }
+            # if(!empty($_SESSION['chat_conversation_id'])) {
+                if($authKey === 'conversation_id')
+                    $this->headers['Authorization'] = $authKey . ':' . $_SESSION['chat_conversation_id'];
+                elseif($authKey === 'Conversation-Id: <id>')
+                    $this->headers['Conversation-Id'] = $_SESSION['chat_conversation_id'];
+            # }
+        }
         $this->headers['Content-Type'] = 'application/json';
+        if($this->debug) writeDebugInfo("http headers: ", $this->headers);
     }
 
     public function loadConfig($cfg='') {
@@ -97,9 +120,9 @@ class OpenAI {
           'RqUID' => self::generateGUID(),
         ];
 
-        $response = \Curla::getFromUrl($this->confg['OauthUrl'],FALSE,30,$headers);
+        $response = \Curla::getFromUrl($this->confg['OauthUrl'],FALSE,20,$headers);
         $arResponse = @json_decode($response, TRUE);
-        writeDebugInfo("Oauth response: ", $response, " as array: ", $arResponse);
+        # writeDebugInfo("Oauth response: ", $response, " as array: ", $arResponse);
         $ret = $arResponse['access_token'] ?? FALSE;
         return $ret;
     }
@@ -113,82 +136,121 @@ class OpenAI {
           ;     # 85995b73-a3bc-7bff-d2b2-7b367befe771
         return $ret;
     }
+
+    # формирую основные параметры запроса в чат-движок
+    public function preparePostFields($request, $arHist = [], $context = '') {
+        $postFields = [];
+        $effortResoning = FALSE;
+        $messages = [];
+        if(!$context) $context = $this->context;
+
+        if($this->chatMode === self::METHOD_COMPLETIONS) {
+            # готовлю параметры под chat/completions
+            if(!empty($this->model))
+                $postFields['model'] = $this->model;
+
+            if(!empty($context)) # задаю стартовый контекст/роль ассистента
+                $messages[] = [ 'role'=>'system', 'content' => $context ];
+            $this->addPreviousMessages($messages, $arHist);
+            # заношу историю вопросов-ответов для создания контекста к данному вопросу
+            $messages[] = [ 'role'=>'user', 'content' => $request ];
+
+            $postFields = [
+                'messages' => $messages,
+                'stream' => false,
+                'temperature' => $this->Temperature,
+                'max_tokens' => $this->maxTokens,
+                # 'presence_penalty' => 0,
+                # 'response_format' => ['type'=>'text'],
+            ];
+        }
+        elseif($this->chatMode === self::METHOD_RESPONSES) {
+            # writeDebugInfo("METHOD_RESPONSES... ");
+            if(!empty($this->model))
+                $postFields['model'] = $this->model;
+            if($effortResoning)
+                $postFields['reasoning'] = [ 'effort'=> $effortResoning ]; // "low"
+
+            if(!empty($this->maxTokens))
+                $postFields['max_output_tokens'] = $this->maxTokens;
+
+            if(!empty($this->confg['stateful'])) {
+                $convid_field = (string) ($this->confg['user_convid'] ?? '');
+                if(!empty($convid_field) && !empty($_SESSION['chat_conversation_id'])) {
+                    $postFields[$convid_field] = $_SESSION['chat_conversation_id'];
+                    # writeDebugInfo("передаю ИД сесии в $convid_field: ", $_SESSION['chat_conversation_id']);
+                }
+            }
+            else { #  stateless, # надо отправлять прошлые ответы как в completions
+                $this->addPreviousMessages($messages, $arHist);
+                # writeDebugInfo("METHOD_RESPONSES, заношу прошлые сообщ-я confg: ", $this->confg);
+            }
+
+            $messages[] = [ 'role'=>'user', 'content' => $request ];
+
+            if(!empty($context)) # instructions: "Talk like a pirate.",
+                $postFields['instructions'] = $context;
+
+            $postFields['input'] = $messages;
+        }
+        return $postFields;
+
+    }
+    public function addPreviousMessages(&$messages, $arHist) {
+        if(count($arHist) && count($arHist)) foreach($arHist as $item) {
+            if(!empty($item['request']))
+                $messages[] = [ 'role'=>'user', 'content' => $item['request'] ];
+
+            if(!empty($item['response'])) {
+                if($this->sendResponseHist === TRUE || count($arHist)<=(int)$this->sendResponseHist)
+                    $messages[] = [ 'role'=>'assistant', 'content' => $item['response'] ];
+            }
+        }
+    }
     public function request($request, $arHist = [], $context = '') {
 
         if(empty($request)) return 'Empty request string!';
         if(!empty($context)) $this->context = $context;
-        /*
-        $request = \RusUtils::mb_trim($request);
-        $parts = preg_split("/[ \s/]/", $request);
-        array_shift($parts);
-        if($parts[0] === '@models') {
-            $result = $this->modelList($parts);
-            # writeDebugInfo("model list returned: ", $result);
-            return "models:<pre>". print_r($result, 1) . '</pre>';
-        }
-        */
         $this->makeHeaders();
-
-        $messages = [];
-        if(!empty($this->context)) # задаю стартовый контекст/роль ассистента
-            $messages[] = [ 'role'=>'system', 'content' => $this->context ];
-
-        # заношу историю вопросов-ответов для создания контекста к данному вопросу
-        if(count($arHist)) foreach($arHist as $item) {
-            if(!empty($item['request']))
-                $messages[] = [ 'role'=>'user', 'content' => $item['request'] ];
-
-            if(!empty($item['response']))
-                $messages[] = [ 'role'=>'assistant', 'content' => $item['response'] ];
-        }
-        $messages[] = [ 'role'=>'user', 'content' => $request ];
-
-        $postFields = [
-            'messages' => $messages,
-            'stream' => false,
-            'temperature' => $this->Temperature,
-            # 'model' => $this->model,
-            'max_tokens' => $this->maxTokens,
-            # 'presence_penalty' => 0,
-            # 'response_format' => ['type'=>'text'],
-        ];
-
-        if(!empty($this->model))
-            $postFields['model'] = $this->model;
-
+        $postFields = $this->preparePostFields($request, $arHist, $context);
+        if(self::$saveAllResponses) writeDebugInfo("prepared postFields: ", $postFields);
         try {
-            $chatUrl = $this->baseUrl.'chat/completions';
+            $chatUrl = $this->buildChatUrl();
             if($this->debug) {
-                writeDebugInfo("calling $chatUrl with params, ", $postFields, " headers: ", $this->headers);
+                writeDebugInfo("calling $chatUrl headers: ", $this->headers);
             }
-            $response = \Curla::getFromUrl($chatUrl,$postFields,60,$this->headers, TRUE);
+            $response = \Curla::getFromUrl($chatUrl,$postFields,self::$maxProcessSeconds,$this->headers, TRUE);
             $errCode = \Curla::getErrNo();
             $responseData = @json_decode($response, TRUE);
-            if($this->debug) {
-                writeDebugInfo("response from AI / JSON: ", $response, "\n as array: ", $responseData);
+            if($this->debug || self::$saveAllResponses) {
+                writeDebugInfo("response from AI / ", $response, "\n as array: ", $responseData);
             }
-            if(isset($responseData['error'])) {
-                $this->errorMessage = $responseData['error']['message'];
+            if(isset($responseData['error']) || $errCode) {
+                $this->errorMessage = $responseData['error']['message'] ?? "curl:$errCode";
                 $result = '{ERROR}: ' . $this->errorMessage;
             }
-            else
-                $result = $responseData['choices'][0]['message']['content'] ?? '{no-answer}';
+            else {
+                if($this->chatMode == self::METHOD_COMPLETIONS)
+                    $result = $responseData['choices'][0]['message']['content'] ?? ('{no-answer},output: <pre>'.print_r($responseData['output'],1).'</pre>');
+                else {
+                    $outType = $responseData['output'][0]['content'][0]['type'] ?? 'undefined';
+                    $result = $responseData['output'][0]['content'][0]['text'] ?? ('{no-answer}, output: <pre>'.print_r($responseData['output'],1).'</pre>');
+                }
+                if(!empty($this->confg['stateful'])) {
+                    $server_convid = $this->confg['server_convid'] ?? 'id';
+                    if(!empty($responseData[$server_convid])) {
+                        $_SESSION['chat_conversation_id'] = $responseData[$server_convid];
+                        # writeDebugInfo("saved conv session id($server_convid): ", $responseData[$server_convid]);
+                    }
+                }
+            }
         }
         catch(Exception $e) { $result = $e->getMessage(); }
         return $result;
-        /*
-        $client = DeepSeekClient::build(self::$apiKey, self::$baseUrl, 30, 'guzzle');
-
-        $response = $client
-            ->withModel($this->model)
-            # ->withStream()
-            ->setTemperature($this->Temperature)
-            ->setMaxTokens(8192)
-            ->setResponseFormat('text') // or "json_object"  with careful .
-            ->query($request)
-            ->run();
-        return $response;
-        */
+    }
+    public function buildChatUrl() {
+        $ret = $this->baseUrl . $this->chatMode;
+        return $ret;
     }
     /**
     * вернет список моделей, доступных для использования

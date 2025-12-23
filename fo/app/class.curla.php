@@ -78,9 +78,13 @@ class CurlA {
         self::$curlobj = curl_init($url);
         if(!self::$curlobj) return FALSE;
         if(!is_array($headers)) $headers = [];
-        if ($timeout>0) self::$timeout = $timeout;
-        if(self::$debug) writeDebugInfo("CURLA url to call: [$url]");
+        if ($timeout>0) {
+            self::$timeout = $timeout;
+            if(self::$debug) writeDebugInfo("CURLA url to call: [$url]");
+        }
         curl_setopt(self::$curlobj, CURLOPT_CONNECTTIMEOUT, self::$timeout);
+        set_time_limit(self::$timeout);
+
         curl_setopt(self::$curlobj, CURLOPT_RETURNTRANSFER, TRUE);
         # curl_setopt($ch, CURLOPT_RETURNTRANSFER, 44455); // to avoid error 56 proxy reject
         curl_setopt(self::$curlobj, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_1_1);
