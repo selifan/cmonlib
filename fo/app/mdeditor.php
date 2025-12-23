@@ -1,153 +1,68 @@
 <?php
 /**
-* страница чат-бот (юзает libs/aibus.php
+* страница онлайн-редактора MarkDown текста с рендером (MarkDown разметка, Mermaid диаграммы)
 * modified 2025-12-21
 */
-class ChatBot {
-    static $engine = 'stub'; # deepseek | stub | openrouter | lmstudio | gigachat | routerairu
-    static $botName = 'Чат-бот'; # что будет видно в заголовках ответов
-    static $userChatSession = '';
-    static $knownActions = [ 'initContextDialog','setActiveContext', 'activateContext' ];
-    const T_CHATBOT_HIST = 'chatbot_hist';
-    const T_CHATBOT_CONTEXTS = 'chatbot_contexts';
-    static $parseMermaid = 1; # подключать ли парсер mermaid диаграмм в MarkDown контенте
+class MdEditor {
     static $mermaid_theme = 'default'; # default | neutral | dark | forest | base
     static $debug = 0;
 
     public static function init() {
-        if(empty(self::$userChatSession) || empty($_SESSION['chat_user_session'])) {
-            if(empty($_SESSION['chat_user_session']))
-                $_SESSION['chat_user_session'] = 'chat-'.date('Y-m-d-H-i-s') . rand(100,999);
-            self::$userChatSession = $_SESSION['chat_user_session'];
-        }
-        if(!empty($_SESSION['chat_engine'])) {
-            self::setEngine($_SESSION['chat_engine']);
-        }
-    }
-    public static function setEngine($strEngine) {
-        if(self::$engine != $strEngine) {
-            self::$engine = $strEngine;
-            unset($_SESSION['chat_user_session']);
-            self::init();
-        }
-    }
-    # готовлю HTML код для диалога выбора контекста
-    public static function initContextDialog() {
-        writeDebugInfo("initContextDialog started");
-        $html = "<div class='p-2'>Выберите один из настроенных контекстов или создайте новый:<form id='fm_chat_setcontext' class='was-validated'>";
-        # select from self::T_CHATBOT_CONTEXTS
-        $myid = \AppEnv::getUserId();
-        $newClass = '';
-        $curCtx = \AppEnv::$db->select(self::T_CHATBOT_CONTEXTS, ['fields'=>'id,userid,context_name',
-          'where' => "userid IN('__system__','$myid')", 'orderby'=>'context_name']);
-        if(is_array($curCtx) && count($curCtx)) {
-            $fmt = "<div class='bordered p-2 m-2'><label><input type='radio' name='contextid' value='%s' onclick='chatBot.chgContext(this)'/> %s</label></div>";
-            $newClass = 'hideme'; # блок ввода нового контекста изначально скрыт, т.к. есть готовые
-            foreach($curCtx as $item) {
-                $html .= sprintf($fmt, $item['id'], $item['context_name']);
-            }
-            $html .= sprintf($fmt, '_new_', 'Создать новую настройку контекста');
-        }
-        $html .= "<div class='$newClass' id='new_context'>Новый контекст - название:<br><div class='row'><input type='text' name='ctx_name' class='form-control w300' required/></div>"
-          . "Текст <br><div class='row'><textarea name='ctx_content' class='form-control w100prc' style='height:100px; overflow:auto; resize:none' required></textarea></div></div></form></div>";
-        # writeDebugInfo("htmlChoose: ", $html);
-        exit($html);
     }
     # форма в браузере, основа взята здесь: https://imranonline.net/building-an-ai-chatbot-with-php-and-deepseek-a-step-by-step-guide/
     public static function form() {
         self::init();
-        $pagetitle = "Чат-бот";
+        $pagetitle = "Редактор Markdown";
         \AppEnv::setPageTitle($pagetitle);
         UseJsModules('js/markdown-it.min.js');
-        // UseJsModules('js/purify.min.js');
-
         UseJsModules('js/mermaid.min.js');
-        UseJsModules('js/markdown-helper.js'); # Динамичкский парсер markdown + mermaid для ответов от ИИ
+        UseJsModules('js/markdown-helper.js'); # Динамический парсер markdown + mermaid
 
-        $botname = self::$botName;
-        $engine = self::$engine;
-        $btnContext = "<button class=\"btn btn-primary\" id=\"btn_context\" onclick=\"chatBot.selectContext()\">Задать контекст</button>";
-        $curContextId = $_SESSION['chatbot_context'] ?? '';
-        if($curContextId) {
-            $strContext = "Контекст:" . self::getContextName($curContextId);
-        }
-        else $strContext = 'Контекст не задан';
-        $additionCode = self::getAdditionCode();
         $html = <<< EOHTM
-$additionCode
-<h1>$pagetitle ($engine) $btnContext</h1>
-<div id="cur_context" class="bordered msg_ok" style="position:fixed; z-index:50000; top:10px; right:20px; width:auto">$strContext</div>
-<div id="chat">
-    <div id="messages" class="bordered p-2" style="min-height:100px; _max-height:800px; overflow:auto"></div>
-    <form id="chat-form">
-        Введите вопрос<br>
-        <textarea id="user-input"  required="required" class="form-control" style="height:100px;overflow:auto"></textarea>
-        <br>
-        <button type="submit" id="btn_request" class="btn btn-primary w200" m-2>Отправить запрос</button>
-        <button type="button" id="btn_reset_chat" class="btn btn-primary w200 m-2" onclick="chatBot.clearChatHistory()" disabled="disabled">(новый чат)</button>
-    </form>
+<style>
+      /* минимальные стили */
+      .mermaid-placeholder { background:#f8f8f8; padding:8px; border-radius:4px; }
+      pre { padding:8px; border-radius:4px; overflow:auto; }
+      div.from-bot { background-color: #fafafa; border: 1px solid #aaa; padding: 1em; border-radius: 6px; margin-bottom:6px;}
+      div.chat-user-request { background-color: #f9f9f9; border: 1px solid #aaa; padding: 1em; border-radius: 6px; margin-bottom:6px;}
+
+      td,th { border:1px solid #a0a0a0; padding: 0.2em 1em;}
+      th { background-color: #eee; }
+</style>
+
+<h1>$pagetitle </h1>
+
+<a href="https://docs.mermaidchart.com/" target="_blank">Mermaid</a> &nbsp; / &nbsp;
+<a href="https://habr.com/ru/articles/652867/" target="_blank">Mermaid диаграммы в Markdown</a> &nbsp; / &nbsp;
+<a href="https://gist.github.com/mbaron/1d79fd3cc4de4070f6895264f01b19a1" target=_blank">Introduction to Mermaid Markdown</a>
+
+<div id="mdeditor" class="row">
+    <div id="edtarea" class="p-2 col-md-3 col-12" style="min-height:420px; min-width:300px">
+      <textarea id="md_edited" class="form-control" style="height:360px; width:100%">Введите код здесь</textarea>
+      <br><input type="button" class="btn btn-primary w200" value="Рендер!" onclick="mdEdit.render()" />
+    </div>
+    <div id="md_result" class="bordered p-2 m-2 col-md-8 col-lg-8 col-12" style="min-height:400px; overflow:auto">для отображения результата</div>
 </div>
 <script>
-document.getElementById('chat-form').addEventListener('submit', async function(e) {
-    e.preventDefault();
-    var userInput = $("#user-input").val();
-    // $("#btn_request").attr("disabled",true).html("Машина думает...");
-    const messagesDiv = document.getElementById('messages');
+mdEdit = {
+  backend: "./?p=mdeditor",
+  done: 0,
+  render: function() {
+    var userInput = $("#md_edited").val();
+    var divchat = $('#md_result');
+    divchat.html("");
+    if(userInput === "") return;
 
-    // Add user message to chat
-    messagesDiv.innerHTML += '<p><strong>Вы:</strong><div class="chat-user-request">' + userInput + '</div>';
-
-    // Send message to server
-    var response = await fetch('./?p=chatbot&action=request', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: userInput })
+    MermaidMarkdown.addMessage(divchat, userInput, 'from-bot').then(function(msg){
+      // console.log('marrdown parsed', msg);
+      mdEdit.done++;
     });
-    // console.log(response);
-    var data = await response.json();
-    // var data = await response.body;
-    // console.log("data:", data);
-    var divchat = $('#messages');
-    divchat.append("<b>Чат-бот</b>:");
-    MermaidMarkdown.addMessage(divchat, data.reply, 'from-bot').then(function(msg){
-      // console.log('Message added', msg);
-      chatBot.answers++;
-    });
-
-    $(window).scrollTop(32000);
-    $("#btn_context").addClass("hideme");
-    // Clear input
-    // document.getElementById('user-input').value = '';
-    $("#user-input").val('');
-    $("#btn_request").attr("disabled",false).html("Отправить запрос");
-
-    $("#btn_reset_chat").attr("disabled", false);
+  },
+};
+// Инициализация
+$(document).ready(function() {
+  MermaidMarkdown.init({ mermaidConfig: { theme: 'default' } });
 });
-chatBot = {
-  backend: "./?p=chatbot",
-  answers: 0,
-  clearChatHistory: function() {
-    $("#messages").html("");
-    $("#btn_context").removeClass("hideme");
-    asJs.sendRequest(chatBot.backend,{action:"resetHistory"}, true);
-  },
-  selectContext: function() {
-    $.post(chatBot.backend, {'action':'initContextDialog'}, function(response) {
-      dlgConfirm(response,chatBot.performSetContext);
-    });
-  },
-  chgContext: function(obj) {
-    console.log("obj: ", obj);
-    if(obj.value ==='_new_') $("#new_context").removeClass("hideme");
-    else $("#new_context").addClass("hideme");
-  },
-  performSetContext: function() {
-    var params = $("#fm_chat_setcontext").serialize();
-    params += "&action=activateContext";
-    // console.log("TODO: set context ", params);
-    asJs.sendRequest(chatBot.backend,params, true);
-  },
-}
 </script>
 EOHTM;
         \AppEnv::appendHtml($html);
@@ -236,14 +151,6 @@ EOHTM;
         return $ret;
     }
 
-    public static function getLastResponse() {
-        $chatSession = $_SESSION['chat_user_session'] ?? '';
-        if(empty($chatSession)) return 'Чат-сессия не стартована! сессия:<br>'.print_r($_SESSION);
-        $arData = \AppEnv::$db->select(self::T_CHATBOT_HIST,
-          ['where'=>['chatsession_id'=>$chatSession], 'orderby'=>'id desc','singlerow'=>1]
-        );
-        return $arData['response'] ?? 'Ответов в сессии <b>$chatSession</b> еще не сохранено!';
-    }
     public static function resetHistory() {
         # TODO: сброс накопленного контекста, стартую новый чат
         unset($_SESSION['chat_user_session']);
@@ -282,7 +189,7 @@ EOHTM;
     }
     # AJAX запрос на выбор/ввод нового контекста
     public static function activateContext() {
-        writeDebugInfo("activateContext params: ", \AppEnv::$_p);
+
         $contextId = AppEnv::$_p['contextid'] ?? '';
         if($contextId === '_new_') {
             $ctName = \RusUtils::mb_trim( \AppEnv::$_p['ctx_name'] ?? '');
@@ -337,39 +244,13 @@ EOHTM;
         }
         exit('1' . AjaxResponse::showError('Вам сюда нельзя!'));
     }
-
-    # код для страницы чат-бота, с подключением парсеров markdown, mermaid (Маша-GPT дала...)
-    public static function getAdditionCode() {
-        $theme = self::$mermaid_theme;
-        $initMermaid = (self::$parseMermaid) ? "MermaidMarkdown.init({ mermaidConfig: { theme: '$theme' } });" : 'mermaid=false;';
-        $code = <<< EOJS
-<!-- script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs" /script -->
-<style>
-      /* минимальные стили */
-      .mermaid-placeholder { background:#f8f8f8; padding:8px; border-radius:4px; }
-      pre { padding:8px; border-radius:4px; overflow:auto; }
-      div.from-bot { background-color: #fafafa; border: 1px solid #aaa; padding: 1em; border-radius: 6px; margin-bottom:6px;}
-      div.chat-user-request { background-color: #f9f9f9; border: 1px solid #aaa; padding: 1em; border-radius: 6px; margin-bottom:6px;}
-
-      td,th { border:1px solid #a0a0a0; padding: 0.2em 1em;}
-      th { background-color: #eee; }
-</style>
-<script>
-// Инициализация
-$(document).ready(function() {
-  MermaidMarkdown.init({ mermaidConfig: { theme: 'default' } });
-});
-</script>
-EOJS;
-        # file_put_contents('tmp/_mermaid-code.htm', $code); # to check correct $ char escapings
-        return $code;
-    }
 }
+
 $thisPage = AppEnv::$_p['p'] ?? '';
-if($thisPage === 'chatbot') {
+if($thisPage === 'mdeditor') {
     $action = AppEnv::$_p['action'] ?? 'form';
     if(!empty($action)) {
-        if(class_exists('ChatBot', $action)) ChatBot::$action();
-        else exit("ERROR: No action $action in ChatBot");
+        if(class_exists('MdEditor', $action)) MdEditor::$action();
+        else exit("ERROR: No action $action in MdEditor");
     }
 }
