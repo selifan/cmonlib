@@ -2,7 +2,7 @@
 /**
 * @name libs/aibus.php
 * Шина для работы с движками ИИ (AI)
-* @version 0.1.001 started 2025-11-07
+* @version 0.10.001 started 2025-12-23
 */
 namespace libs;
 class AiBus {
@@ -10,7 +10,7 @@ class AiBus {
     static $engineInstance = NULL;
     static $useHistory = FALSE;
     static $errorMessage = '';
-    static $debug = 1;
+    static $debug = FALSE;
     /**
     * подключение к настроенному движку с указанным именем
     * @param mixed $engine имя движка
