@@ -3,7 +3,7 @@
 * @name libs/dne.php (бывший include/class.dne.php)
 * Multi-Level Data Node Exchange (through xml), "DNE" - export full data node to XML and import into DB from XML
 * Node: one row in "primary" table and ALL rows from all "child" tables binded to this primary by foreign key
-* @version 1.03.001 2025-12-08
+* @version 1.04.001 2026-01-25
 * @author Alexander Selifonov
 */
 namespace Libs;
@@ -18,7 +18,7 @@ class DNE {
     private static $cfgFileMapping = [];
     private static $finderCallback = NULL; # user function that can find XML DNE file if it's not in default folder
 
-    private $_debug = 0 ; # turn On debug logging
+    private $_debug = 0; # turn On debug logging
     private $_emulate = FALSE; # NO DATA UPDATE, emulate it!
     protected $dbObj = NULL;
     private $_transactional = TRUE;
@@ -118,6 +118,7 @@ class DNE {
         $ret = [
           'pkfield' => (string) ($xObj['pkfield'] ?? ''),
           'fkfield' => (string) ($xObj['fkfield'] ?? ''),
+          'parentfield' => (string) ($xObj['fkfield'] ?? ''),
           'backfkfield' => (string) ($xObj['backfkfield'] ?? ''),
           'uniquefield' => (string) ($xObj['uniquefield'] ?? ''),
           'orderby' => (string) ($xObj['orderby'] ?? ''),
@@ -159,12 +160,16 @@ class DNE {
             # обратный foreign key - сидит в основной записи
             $data = []; # TODO
             $whereBack = [];
+
             foreach(explode(",",$backfkfield) as $oneKey) {
-                if(!empty($parentRow[$oneKey]))
+                if(!empty($parentRow[$oneKey])) {
                     $findValue = $parentRow[$oneKey];
                     if(!is_numeric($findValue)) $findValue = "'$findValue'";
                     $whereBack[] = "$pkfield=$findValue";
+                }
             }
+
+            if(!count($whereBack)) return []; // empty parent field value(s)
             $whereBack = implode (' OR ', $whereBack);
             if($this->_debug) writeDebugInfo("tbackfkfield where condition: [$whereBack]");
             if(!empty($whereBack)) {
@@ -302,7 +307,7 @@ class DNE {
             $backfkFld = $tDef[$tbname]['backfkfield'];
             $pkFld = $tDef[$tbname]['pkfield'];
             $uniqFld = $tDef[$tbname]['uniquefield'];
-            $this->_outputData("$spaces<childtable name=\"$tbname\" pkfield=\"$pkFld\" fkfield=\"$fkFld\" uniquefield=\"$uniqFld\">\n");
+            $this->_outputData("$spaces<childtable name=\"$tbname\" pkfield=\"$pkFld\" fkfield=\"$fkFld\" uniquefield=\"$uniqFld\" backfkfield=\"$backfkFld\">\n");
             foreach($rows as $onerow) {
                 $this->_outputData("$spaces  <datarow>\n");
                 $this->encodeRow($onerow, $tDef[$tbname]['pkfield'],$pkFld,"$spaces  ", $tDef[$tbname]);
@@ -402,7 +407,7 @@ class DNE {
 
         $primaryTable = (string)$xml->primarydata['name'];
         $primaryPkf =(string)$xml->primarydata['pkfield'];
-        $primaryUnf =(string)$xml->primarydata['uniquefield'];
+        $primaryUnf =(string)($xml->primarydata['uniquefield'] ?? '');
         if(!empty($origTable) && $origTable !== $primaryTable) {
             return ['result'=>'ERROR', 'message'=>'Wrong XML File!'];
         }
@@ -441,6 +446,7 @@ class DNE {
         if(!empty($xml->childtables)) foreach($xml->childtables->children() as $tag=>$obj) {
             # $this->getCurrentSubTree($primaryTable, $xml->childtables, $dataKey,0);
             $this->getCurrentSubTree($primaryTable, $obj, $dataKey,0);
+            # writeDebugInfo("subtree current ", $this->oldRecords);
             # return $this->oldRecords;
         }
         if($this->_debug) {
@@ -466,7 +472,7 @@ class DNE {
         # return $xml->childtables;
         if(isset($xml->childtables)) {
             foreach($xml->childtables->children() as $cid=>$obj) {
-                $resultStrg = $this->importSubNode($obj,$recId);
+                $resultStrg = $this->importSubNode($obj,$recId, $primaryTable,$primaryPkf);
                 $ret['log'] = array_merge(($ret['log'] ?? []) , $resultStrg);
                 if($this->_debug) writeDebugInfo("importSubNode(recId = ",$recId,") result: ", $resultStrg);
             }
@@ -504,6 +510,7 @@ class DNE {
 
         return $ret;
     }
+
     public function getErrorMessage() {
         return $this->_errormessage;
     }
@@ -518,23 +525,25 @@ class DNE {
         if(isset($tdef->childtable))
             $myObj = $tdef->childtable;
         else $myObj = $tdef;
-        if(!isset($myObj['name']) )
-            return;
+
         $retSql = [];
         $myName = (string) ($myObj['name'] ?? '');
         $myPkField = (string) ($myObj['pkfield'] ?? '');
         $myFkField = (string) ($myObj['fkfield'] ?? '');
+        $backfkfield =(string)($myObj['backfkfield'] ?? '');
         if(empty($myName)) {
             writeDebugInfo("wrong tdef passed - no name attr!");
-            return;
+            return FALSE;
         }
         if(isset($myObj->datarow)) foreach($myObj->children() as $subDef) {
             # writeDebugInfo("KT-700 datarow->children item(subDef): ", $subDef);
             $pkvalue = (string)($subDef->datarow->rowdata[$myPkField] ?? '');
-            $where = is_array($pkeyValue) ? "$myFkField IN(".implode(',',$pkeyValue).')' : [$myFkField=>$pkeyValue];
-
-            $existRecs = $this->dbObj->select($myName, [ 'fields'=>$myPkField,'where'=>$where,
-             'associative'=>0, 'orderby'=>$myPkField ]);
+            if(!empty($myFkField)) {
+                $where = is_array($pkeyValue) ? "$myFkField IN(".implode(',',$pkeyValue).')' : [$myFkField=>$pkeyValue];
+                $existRecs = $this->dbObj->select($myName, [ 'fields'=>$myPkField,'where'=>$where,
+                  'associative'=>0, 'orderby'=>$myPkField ]);
+            }
+            else $existRecs = []; # backfkfield - irnore existing child records, alwais add new one!
             # writeDebugInfo("KT-701 $myName/$pkeyValue exist Records: ", $existRecs, "  sql: ", $this->dbObj->getLastQuery());
             if(is_array($existRecs) && count($existRecs)) {
                 $this->oldRecords[$myName] = array_merge(($this->oldRecords[$myName] ?? []),$existRecs);
@@ -557,14 +566,15 @@ class DNE {
     * @param mixed $uniqueKey unique field name
     * @param mixed $uniqueValue unique value
     * @param mixed $fkValue foreignKey field value
+    * @param mixed $childbackFk "back/reverse" FK field
     */
-    private function _upsertRow($table, $data, $primaryPkf, $uniqueKey, $fkKey = NULL, $fkValue=NULL) {
+    private function _upsertRow($table, $data, $primaryPkf, $uniqueKey, $fkKey = NULL, $fkValue=NULL, $childbackFk=NULL) {
         $pkValue = FALSE;
         $uniqueValue = FALSE;
         $ret = [];
         if($this->_debug>1) {
             writeDebugInfo("_upsertRow($table,pk='$primaryPkf', uniq='$uniqueKey',fkey='$fkKey',fkval='$fkValue') data: ", $data);
-            writeDebugInfo('trace ', debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 2));
+            # writeDebugInfo('trace ', debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 2));
         }
         if(isset($data->rowdata)) {
             $myData = $this->_getRecordData($data->rowdata);
@@ -578,9 +588,29 @@ class DNE {
         }
 
         $existRecord = 0;
-        if(isset($this->oldRecords[$table]) && count($this->oldRecords[$table])>0)
+        if(isset($this->oldRecords[$table]) && count($this->oldRecords[$table])>0 && empty($childbackFk))
             $existRecord = array_shift($this->oldRecords[$table]);
         # use first existing record to update not used yet
+
+        if(!empty($childbackFk) ) {
+            $arRow = self::xmlToArray($data->rowdata);
+
+            if( !empty($uniqueKey) && !empty($arRow[$uniqueKey]) ) {
+                $existRq = $this->dbObj->select($table, ['fields'=>$primaryPkf,
+                    'where'=>[$uniqueKey=>$arRow[$uniqueKey]],'singlerow'=>1,'associative'=>0]);
+            }
+            else $existRq = FALSE;
+            if(!empty($existRq)) {
+                $newId = $existRq;
+                $this->dbObj->update($table, $arRow, [$primaryPkf=>$existRq]);
+            }
+            else
+                $newId = $this->dbObj->insert($table, $arRow);
+
+            if($this->_debug) writeDebugInfo("childbackFk/$childbackFk: added/update to [$existRq] to $table , returning row id: $newId");
+            return $newId;
+        }
+
         if ($fkKey && $fkValue) {
             $newRowData[$fkKey] = $fkValue;
             $canAdd = TRUE;
@@ -631,19 +661,53 @@ class DNE {
 
         if($this->_debug) writeDebugInfo("upsertRow $table result($pkValue) ", $ret);
         if(!$this->failure && !empty($data->childtables)) {
-            # writeDebugInfo("KT14 childtabes ", $data->childtables);
+            if($this->_debug) writeDebugInfo("KT14 updating childtabes: ", $data->childtables);
             foreach($data->childtables->children() as $keytag => $childObj) {
-                if($this->_debug > 1) writeDebugInfo("KT15 Adding child records $keytag datarow ", $childObj);
-                $childName = (string)$childObj['name'];
-                $childPk = (string)$childObj['pkfield'];
-                $childFk = (string)$childObj['fkfield'];
-                foreach($childObj->datarow as $item) {
-                    # writeDebugInfo("_upsertRow($childName for datarow item ", $item);
-                    $ret[] = $this->_upsertRow($childName, $item, $childPk,'',$childFk, $pkValue);
+                if( $this->_debug ) writeDebugInfo("KT15 Adding child records $keytag childObj: ", $childObj);
+                $childName = (string) $childObj['name'];
+                $childPk = (string) $childObj['pkfield'];
+                $childFk = (string) $childObj['fkfield'];
+                $childbackFk = (string) $childObj['backfkfield'];
+                if($this->_debug) writeDebugInfo("$childName: fkfield=[$childFk], backfkfield=[$childbackFk]");
+                if(!empty($childbackFk)) {
+                    # $childId = $this->_addToChildTable($childName, $item, $childPk);
+                    if($this->_debug) writeDebugInfo("create record in $childName by backfkfield=[$childbackFk]");
+                    $newId = $this->dbObj->insert($childName, $item);
+                    # there must be ONLY ONE child record with such {backfkfiel}>!
+                    if($newId) {
+                        $updResult = $this->dbObj->update($table, [$childbackFk=> $newId], [$pkfiels=>$pkValue]);
+                        if($this->_debug) writeDebugInfo("save new child ID into field $table.$childbackFk in record ($pkValue) : [$updResult]");
+                        if( !empty($childbackFk) && is_scalar($recordId) ) {
+                            $updBack = $this->dbObj->update($table, [$childbackFk=>$recordId], [$childPk=>$pkValue]);
+                            writeDebugInfo("fix new ID into parent $table.$childbackFk: $recordId,  update result:[$updBack]");
+                            return;
+                        }
+
+                    }
+                    elseif($this->_debug) writeDebugInfo( "inserting row in  in $childName Error, ", $this->dbObj->sql_error() );
+                }
+                else {
+                    if($this->_debug) writeDebugInfo("upsert into $childName by childFk=[$childFk]=$pkValue");
+                    foreach($childObj->datarow as $item) {
+                        writeDebugInfo("_upserting row into($childName for datarow item ", $item);
+                        $ret[] = $newId = $this->_upsertRow($childName, $item, $childPk,'',$childFk, $pkValue);
+                    }
                 }
             }
         }
         return [$pkValue, $ret];
+    }
+    public static function xmlToArray($xmlElement) {
+        $arRet = [];
+        foreach($xmlElement->children() as $fldName => $fldValue) {
+            $arRet[$fldName] = (string)$fldValue;
+        }
+        return $arRet;
+    }
+    private function _addBackFkField($childTableName, $arData, $childPk) {
+        $newId = $this->dbObj->insert($childTableName, $arData);
+        writeDebugInfo("added data to $childTableName, new id : $newId");
+        return $newId;
     }
 
     private function _getRecordData($xmlrow) {
@@ -673,17 +737,17 @@ class DNE {
     * @param mixed $node node data
     * @param mixed $fkValue parent Primary Key value (foreign key for all records in this recordset)
     */
-    public function importSubNode($node, $fkValue) {
+    public function importSubNode($node, $fkValue, $parentTable, $parentPkField) {
         $tbname = (string) $node['name'];
         $pkField = (string) $node['pkfield'];
         $fkField = (string) $node['fkfield'];
         $unqField = (string) ($node['uniquefield'] ?? '');
-
+        $childbackFk = (string) ($node['backfkfield'] ?? '');
         $recno = 0;
-        $ret[] = "Importing data into child table [$tbname], pkfield:$pkField, foreign: $fkField, unique:$unqField";
+
+        $ret = ["Importing data into child table [$tbname], pkfield:$pkField, foreign: $fkField, unique:$unqField"];
         if($this->fileFormat < 2) {
             foreach($node->children() as $nodekey => $record) {
-                # writeDebugInfo("child $nodekey: ", $record);
                 if ($nodekey !== 'datarow') continue;
                 $updDta = $this->_getRecordData($record);
                 $result = $this->_upsertRow($tbname, $updDta, $pkField, $unqField, $fkField, $fkValue);
@@ -691,9 +755,13 @@ class DNE {
                 $recno++;
             }
         }
-        else { #
+        else { # format v2
             foreach($node->datarow as $record) {
-                $result = $this->_upsertRow($tbname, $record, $pkField, $unqField, $fkField, $fkValue);
+                $result = $this->_upsertRow($tbname, $record, $pkField, $unqField, $fkField, $fkValue, $childbackFk);
+                if(!empty($childbackFk) && !empty($result) && !empty($parentTable)) {
+                    $updParent = $this->dbObj->update($parentTable, [$childbackFk=>$result], [$parentPkField=>$fkValue]);
+                    break;
+                }
                 $ret[] = $result;
                 $recno++;
             }

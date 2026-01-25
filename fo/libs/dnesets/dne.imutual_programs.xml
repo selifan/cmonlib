@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<expdef>
+  <version modified="2026-01-25">1.01</version>
+  <module>imutual</module>
+  <comment>Выгрузка программ ДСЖ</comment>
+  <description>Конфигурации программ ИСЖ</description>
+  <baseparameters primarytable="imutual_programs" pkfield="id" uniquefield="codirovka" />
+  <childtables>
+    <childtable name="imutual_tariffs" pkfield="tariffid" backfkfield="used_tariff" uniquefield="tarifname" />
+  </childtables>
+
+</expdef>
