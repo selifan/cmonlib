@@ -1,8 +1,9 @@
 <?php
 /**
- * Класс для парсинга табличных данных из Markdown файла
+ * Класс для парсинга табличных данных из Markdown файла (| значение 1 | значение 2| ...|)
  * Thank You, mashaGPT!
  * created 2026-01-13
+ * modified 2026-01-16 Alexander Selifonov (added converting to tab-delimited txt
  */
 class MarkdownTableParser
 {
@@ -14,18 +15,31 @@ class MarkdownTableParser
      * @return array Ассоциативный массив с данными таблицы
      * @throws Exception Если файл не найден или не удалось прочитать
      */
-    public static function parseFile(string $filePath, bool $hasHeaders = true): array
+    public static function parseFile(string $filePath, bool $hasHeaders = true, $convertToTxt=false): array
     {
         if (!file_exists($filePath)) {
             throw new Exception("Файл не найден: {$filePath}");
         }
 
-        $content = file_get_contents($filePath);
+        $content = @file_get_contents($filePath);
         if ($content === false) {
             throw new Exception("Не удалось прочитать файл: {$filePath}");
         }
-
-        return self::parseContent($content, $hasHeaders);
+        $arRet = self::parseContent($content, $hasHeaders);
+        if($convertToTxt) {
+            if(isset($arRet[0][0])) $arData = $arRet[0]; # несколько таблиц - сохраняю только одну первую
+            else $arData = $arRet;
+            $toFile = $filePath . '.txt';
+            $fhan = fopen($toFile, "w");
+            if($fhan) {
+                fwrite($fhan, implode("\t", array_keys($arData[0])) . "\n");
+                foreach($arData as $row) {
+                    if(!fwrite($fhan, implode("\t", array_values($row)) . "\n")) break;
+                }
+                fclose($fhan);
+            }
+        }
+        return $arRet;
     }
 
     /**

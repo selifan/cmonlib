@@ -2,8 +2,8 @@
 /**
 * @package webapp.core - Core classes / framework for [corporate] Web application
 * @name webapp.core.php
-* @version 1.30.002
-* modified : 2025-09-26
+* @version 1.32.001
+* modified : 2026-02-05
 * by Alexander Selifonov
 **/
 abstract class appPlugins {
@@ -80,7 +80,7 @@ abstract class appPlugins {
 
 abstract class WebApp {
 
-    const VERSION = '1.30';
+    const VERSION = '1.31';
     static $FOLDER_ROOT = '';
     static $FOLDER_APP = '';
     static $BASEURL = ''; # used in building "absolute" URI's in application
@@ -876,6 +876,7 @@ abstract class WebApp {
     private static function readCfgDef($cfgXmlFile) {
         if(is_file($cfgXmlFile)) {
             $xml = @simplexml_load_file($cfgXmlFile);
+            # $debug = stripos($cfgXmlFile, '/imutual/');
             if(!($xml)) {
                 self::logErr('loadConfigDef: Failed to read '.$cfgXmlFile);
                 # die('Reading config XML file error, call developers!');
@@ -901,51 +902,67 @@ abstract class WebApp {
                 $fields = [];
                 # if($pageid === 'config_zdebug') writeDebugInfo(" fields: ", $pageitem->fields);
                 foreach($pageitem->fields->children() as $fkey=>$fdef) {
+
                     $fname = isset($fdef['name']) ? (string)$fdef['name'] : '';
-                    if(!$fname) continue;
+                    if(!$fname && $fkey==='field') continue;
                     $ftype = isset($fdef['type']) ? (string)$fdef['type'] : 'text';
                     $arrButt = '';
-                    if($ftype === 'toolbar') {
-                        # if($pageid === 'config_zdebug')
-                        # writeDebugInfo("toolbar def:", $fdef);
-                        $arrButt = []; $btnId = 0;
-                        # if(!empty($fdef->button))
-                        foreach($fdef->children() as $key=>$child) {
-                            # writeDebugInfo("$key in toolbar: ", $child);
-                            if($key==='button') {
-                                $btnId++;
-                                $arrButt[] = [
-                                    'type' => $key,
-                                    'name' => ((string)$child['name'] ?? "$fname_{$btnId}"),
-                                    'label' => ((string)$child['label'] ?? 'new btn'),
-                                    'onclick' => ((string)$child['onclick'] ?? ''),
-                                    'title' => ((string)$child['title'] ?? ''),
-                                ];
+                    if($fkey === 'field') {
+                        if($ftype === 'toolbar') {
+                            # if($pageid === 'config_zdebug')
+                            # writeDebugInfo("toolbar def:", $fdef);
+                            $arrButt = []; $btnId = 0;
+                            # if(!empty($fdef->button))
+                            foreach($fdef->children() as $key=>$child) {
+                                # writeDebugInfo("$key in toolbar: ", $child);
+                                if($key==='button') {
+                                    $btnId++;
+                                    $arrButt[] = [
+                                        'type' => $key,
+                                        'name' => ((string)$child['name'] ?? "$fname_{$btnId}"),
+                                        'label' => ((string)$child['label'] ?? 'new btn'),
+                                        'onclick' => ((string)$child['onclick'] ?? ''),
+                                        'title' => ((string)$child['title'] ?? ''),
+                                    ];
+                                }
+                            }
+                        }
+
+                        $width = isset($fdef['width']) ? (string)$fdef['width'] : 0;
+                        $height = isset($fdef['height']) ? (string)$fdef['height'] : 0;
+                        $default = isset($fdef['default']) ? (string)$fdef['default'] : '';
+                        $onchange = isset($fdef['onchange']) ? (string)$fdef['onchange'] : '';
+                        $onclick = isset($fdef['onclick']) ? (string)$fdef['onclick'] : '';
+                        $attribs = isset($fdef['attribs']) ? (string)$fdef['attribs'] : '';
+                        $label = isset($fdef['label']) ? self::toClientCset((string)$fdef['label']) : $fname;
+                        $title = isset($fdef['title']) ? self::toClientCset((string)$fdef['title']) : '';
+                        $logging = isset($fdef['log']) ? (int)$fdef['log'] : 0; # log "change value" event
+                        $groupid = isset($fdef['groupid']) ? (string)$fdef['groupid'] : '';
+                        $rowclass = isset($fdef['rowclass']) ? (string)$fdef['rowclass'] : '';
+                        $onclick = isset($fdef['onclick']) ? (string)$fdef['onclick'] : '';
+                        $checkevent = isset($fdef['checkevent']) ? (string)$fdef['checkevent'] : '';
+                        $options = isset($fdef['options']) ? self::toClientCset((string)$fdef['options']) : '';
+                        $required = isset($fdef['required']) ? (string)$fdef['required'] : 0;
+                        $fields[$fname] = array('name'=>$fname, 'type'=>$ftype,'label'=>$label,'title'=>$title
+                           ,'width'=>$width, 'height'=> $height, 'onchange'=>$onchange,'onclick'=>$onclick
+                           ,'options'=>$options,'attribs'=>$attribs,'groupid' => $groupid
+                           ,'default'=>$default, 'log'=>$logging, 'onclick' => $onclick, 'rowclass'=>$rowclass
+                           ,'checkevent' => $checkevent
+                           ,'required' => $required
+                           # ,'children' => $arrButt
+                        );
+                        if($ftype === 'toolbar') $fields[$fname]['children'] = $arrButt;
+                    }
+                    elseif($fkey === 'loadfields') {
+                        # user function must return array of fields
+                        $fromFunc = (string) ($fdef['from'] ?? '');
+                        if(is_callable($fromFunc)) {
+                            $arLoaded = call_user_func($fromFunc);
+                            if(is_array($arLoaded) && count($arLoaded)) {
+                                $fields = array_merge($fields,$arLoaded);
                             }
                         }
                     }
-
-                    $width = isset($fdef['width']) ? (string)$fdef['width'] : 0;
-                    $height = isset($fdef['height']) ? (string)$fdef['height'] : 0;
-                    $default = isset($fdef['default']) ? (string)$fdef['default'] : '';
-                    $onchange = isset($fdef['onchange']) ? (string)$fdef['onchange'] : '';
-                    $onclick = isset($fdef['onclick']) ? (string)$fdef['onclick'] : '';
-                    $attribs = isset($fdef['attribs']) ? (string)$fdef['attribs'] : '';
-                    $label = isset($fdef['label']) ? self::toClientCset((string)$fdef['label']) : $fname;
-                    $title = isset($fdef['title']) ? self::toClientCset((string)$fdef['title']) : '';
-                    $logging = isset($fdef['log']) ? (int)$fdef['log'] : 0; # log "change value" event
-                    $groupid = isset($fdef['groupid']) ? (string)$fdef['groupid'] : '';
-                    $rowclass = isset($fdef['rowclass']) ? (string)$fdef['rowclass'] : '';
-                    $onclick = isset($fdef['onclick']) ? (string)$fdef['onclick'] : '';
-                    $checkevent = isset($fdef['checkevent']) ? (string)$fdef['checkevent'] : '';
-                    $options = isset($fdef['options']) ? self::toClientCset((string)$fdef['options']) : '';
-                    $fields[$fname] = array('name'=>$fname, 'type'=>$ftype,'label'=>$label,'title'=>$title
-                       ,'width'=>$width, 'height'=> $height, 'onchange'=>$onchange,'onclick'=>$onclick
-                       ,'options'=>$options,'attribs'=>$attribs,'groupid' => $groupid
-                       ,'default'=>$default, 'log'=>$logging, 'onclick' => $onclick, 'rowclass'=>$rowclass
-                       ,'checkevent' => $checkevent
-                       ,'children' => $arrButt
-                    );
                 }
 
                 if(isset(self::$_defcfg[$pageid])) {
@@ -2527,6 +2544,11 @@ EOJS;
         $ret = self::$_plugins[$pluginId]->getVersion();
         else $ret = '';
         return $ret;
+    }
+
+    # {upd/2025-12-19} find out if user has specified right (and it's level if yes)
+    public static function userHasRight($rightId) {
+        return self::$auth->getAccessLevel($rightId);
     }
 } // WebApp class end
 

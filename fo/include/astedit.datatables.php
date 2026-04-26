@@ -4,18 +4,10 @@
  * @name astedit.datatables.php - grid render using datatables.js https://datatables.net/
  * used bootstrap icons, jQuery, asjs.js
  * @author Alexander Selifonov, < alex [at] selifan dot ru >
- * @Version 1.0.007 based on astedit 1.88.001
- * updated 2025-12-18 created 2025-11-27
+ * @Version 1.02.001 based on astedit 1.88.001
+ * updated 2026-02-06 created 2025-11-27
  **/
 # User field types, added by including your own classes
-interface UserFieldType
-{
-    public function isTextField();
-    public function getEditCode($fldname, $values);
-    public function encodeValue($fldname, $values);
-    public function decodeValue($fldname, $values);
-}
-
 if (!isajaxCall()) {
     UseJsModules("datatables");
 } # use datatables.js
@@ -25,7 +17,7 @@ class Astedit
     static $db = null;
     static $extensionParams = [];
     const PREFIX_MACRO = "%tabprefix%";
-    const VERSION = "1.0";
+    const VERSION = "1.02";
     static $VERBOSE = 0; // set it to 1 if some 'debug' messages needed
     static $checkLoginFunc = false; # user function to check new login against existing ones
     public static function ActivateDateModifier()
@@ -164,7 +156,7 @@ asteditJs = {
   setFilter: function(tid, formid) {
     asteditJs.workingId = tid;
     var params = $("#"+formid).serialize() + "&ast_act=setfilter";
-    console.log("Set Filter ", params);
+    // console.log("Set Filter ", params);
     $("input.resetfilter", "#"+formid).prop("disabled", false);
     asJs.sendRequest(asteditJs.tc[tid].postUrl, params, true, false, asteditJs.reloadFirstPage);
   },
@@ -190,6 +182,10 @@ asteditJs = {
         dlgOpts.dialogClass = 'floatwnd';
         $('<div id="dlg_helppage" style="z-index:9900">'+response+'</div>').dialog(dlgOpts);
     });
+  },
+  redrawFlexFieldSet: function(tid,fieldname) {
+    var params = $("#astedit_"+tid).serialize() + "&ast_act=redrawFlexFieldSet&flexfield="+fieldname;
+    asJs.sendRequest(asteditJs.tc[tid].postUrl, params, true);
   }
 };
 EOJS;
@@ -800,6 +796,7 @@ class CFieldDefinition # one table field definition
     public $afterinputcode = ""; # additional html code after input field (some buttons with JS code etc...)
     public $editRowClass = ""; # edditional class name for whole row in edit form
     public $imgatt = "";
+    public $flexfieldset = FALSE; # will contain udf functon name and field name it content depends on
     public $subtype = false;
     public $specs = [];
     public $unique = false;
@@ -1584,11 +1581,22 @@ class CTableDefinition # class for holding info about table structure
                     }
                     if (strtoupper("WYSIWYG" === $_arr[0])) {
                         $this->_wysiwyg[] = $fld->id;
-                    } elseif ("FILE" === strtoupper($_arr[0])) {
+                    }
+                    elseif ("FILE" === strtoupper($_arr[0])) {
                         $this->_multipart = true;
                         $tp = $_arr;
                         array_shift($tp);
                         $this->_savefile_pm[$fldid] = $tp;
+                    }
+                    elseif ("FLEXFIELDSET" === strtoupper($_arr[0])) {
+                        $fld->edittype = 'FLEXFIELDSET';
+                        $masterField = trim($_arr[2] ?? '');
+                        $fld->flexfieldset = [
+                          'htmlrender' => trim($_arr[1] ?? ''), # callback function to render HTML subform
+                          'masterfield' => $masterField,
+                          # 'function' => trim($_arr[3] ?? ''),
+                        ];
+                        if(!empty($masterField)) $this->addFlexFieldEvent($fld);
                     }
 
                     if (!empty($tar[13])) {
@@ -1860,24 +1868,43 @@ class CTableDefinition # class for holding info about table structure
         ]);
         return $ret;
     }
+    private function getEditType($fieldName) {
+        $eType = $this->fields[$fieldName]->edittype ?? '';
+        if(!empty($eType)) {
+            $splt = explode(',',$eType);
+            return strtoupper($splt[0]);
+        }
+        return '';
+    }
+    # creates "change" event to re-render flexfieldset block after changing parent field value
+    private function addFlexFieldEvent(CFieldDefinition $objField) {
+        # writeDebugInfo("addFlexFieldEvent for ", $objField);
+
+        $myField = $objField->id;
+        $browseId = $this->id;
+        $parentFld = $objField->flexfieldset['masterfield'];
+        $parentEtype = $this->getEditType($parentFld);
+        # writeDebugInfo("$parentFld is $parentEtype");
+        $jqObj = ($parentEtype === 'SELECT') ? 'select' : 'input';
+        $jsEvent = <<< EOJS
+$(document).ready(function(){
+  $("{$jqObj}[name=$parentFld]").on("change", function() {
+    var newVal = $(this).val();
+    console.log("changed $parentFld for flex $myField:", newVal);
+    asteditJs.redrawFlexFieldSet("$browseId","$myField");
+  });
+});
+EOJS;
+
+        $this->addJsCode($jsEvent);
+    }
     /**
      * @desc AddField adds one field to the structure definition
      */
-    function AddField(
-        $fldid,
-        $ftype = "VARCHAR",
-        $flen = 10,
-        $fdesc = "",
-        $sdesc = "",
-        $notnull = 0,
-        $defvalue = "",
-        $showcond = 1,
-        $showformula = "",
-        $econd = 1,
-        $etype = "",
-        $idx = "",
-        $showhref = "",
-        $hrefaddon = ""
+    public function AddField($fldid,$ftype = "VARCHAR",$flen = 10,
+        $fdesc = "",$sdesc = "",$notnull = 0,$defvalue = "",
+        $showcond = 1,$showformula = "", $econd = 1,
+        $etype = "", $idx = "", $showhref = "", $hrefaddon = ""
     ) {
         $fldid = strtolower($fldid);
         if (isset($this->fields[$fldid])) {
@@ -3603,6 +3630,7 @@ EOJS;
             case "HIDDEN":
                 $ret = "<input type='hidden' id='$editid' name='$editid' value='$def' />\n";
                 break;
+
             case "CHECKBOX":
                 # $onClick = (empty($astedit_jsHandler[$this->id][$id]) ? '':"onClick='".$astedit_jsHandler[$this->id][$id]."'");
                 $checked = empty($def) ? "" : 'checked="checked"';
@@ -3798,26 +3826,29 @@ EOJS;
                     } #<5>
                 } #<4>
                 break;
-            /*
-     case 'BLISTEXT':
-           $ret = '';
-           # $def = empty($row[$id])? '':$row[$id];
-           if(!empty($ar->edittype)) { #<4>
-             if(!empty($elist)) {
-               if ($forsearch) {
-                   $ret = "<select id='$editid' name='$editid' $addon>\n";
-                   $lar = GetArrayFromString($elist);
-                   $ret .= DrawSelectOptions($lar,$def,true) . '</select>';
-                   $vstring = '';
-               }
-               else {
-                   $lar = GetArrayFromString($elist);
-                   $ret = self::DrawBinaryListExt($id, $lar,$def);
-               }
-             } #<5>
-           } #<4>
-           break;
-     */
+
+            case 'FLEXFIELDSET':
+                # $prmFunc = $ar->flexfieldset['function'] ?? '';
+                $masterField = $ar->flexfieldset['masterfield'] ?? '_!undef!_';
+                $flexRenderer = $ar->flexfieldset['htmlrender'] ?? FALSE;
+                if(!empty($flexRenderer) && is_callable($flexRenderer)) {
+                    $parentValue = $row[$masterField] ?? '';
+                    # $subParams = call_user_func($prmFunc, $parentValue);
+                    # if(is_array($subParams) && count($subParams)) {
+                    if(!empty($row[$id])) $curFlexValues = @json_decode($row[$id], TRUE);
+                    else $curFlexValues = [];
+                    $ret = call_user_func($flexRenderer, [$parentValue, $curFlexValues, $id]);
+                    if(is_array($ret))
+                        $ret = $flexRenderer.'/TODO: render subform from fld defs '. ($row[$id] ?? 'none');
+
+                    #}
+                    # else $ret = '';
+                }
+                else $ret = '';
+
+                $ret = "<div id=\"_flex_{$id}\">$ret</div>";
+                break;
+
             case "FILE":
                 $ret = "<input type='file' name='$editid' id='{$ar->id}' {$txtclass} style='width:280px' />";
                 break;
@@ -4097,12 +4128,7 @@ EOJS;
         $returnBody = false,
         $fixFields = []
     ) {
-        global $id,
-            $ast_act,
-            $ast_tips,
-            $ast_datarow,
-            $as_cssclass,
-            $ast_wysiwyg_type;
+        global $id,$ast_act,$ast_tips,$ast_datarow,$as_cssclass,$ast_wysiwyg_type;
         $tid = $this->tbrowseid;
         if (is_array($fixFields) && count($fixFields)) {
             $this->fixFields = $fixFields;
@@ -4176,12 +4202,6 @@ function asteditShowHelp() {
 
 EOJS;
         }
-        /*if($this->loginFieldsExists())*/ $js .= <<<EOJS
-function astCheckUniqueness(tblid,obj,recid) {
-    var recid = $('#_astkeyvalue_').val();
-    SendServerRequest('{$this->baseuri}',{ast_act:'check_loginunique', tableid:tblid, fieldid: obj.name,fvalue: obj.value, record:recid});
-}
-EOJS;
 
         if (!empty($js)) {
             $strRet .= "<script type='text/javascript'>$js</script>\n";
@@ -4364,44 +4384,8 @@ EOJS;
             exit("</body></html>");
         }
     }
-    /*
-    function SetEditButton($picurl, $width = 0, $height = 0)
-    {
-        global $asbtn;
-        $astbtn["edit"] = $picurl;
-        if ($width) {
-            $astbtn["w"] = $width;
-        }
-        if ($height) {
-            $astbtn["h"] = $height;
-        }
-    }
 
-    function SetDelButton($picurl, $width = 0, $height = 0)
-    {
-        global $asbtn;
-        $astbtn["del"] = $picurl;
-        if ($width) {
-            $astbtn["w"] = $width;
-        }
-        if ($height) {
-            $astbtn["h"] = $height;
-        }
-    }
-
-    function SetAddButton($picurl, $width = 0, $height = 0)
-    {
-        global $asbtn;
-        $astbtn["add"] = $picurl;
-        if ($width) {
-            $astbtn["w"] = $width;
-        }
-        if ($height) {
-            $astbtn["h"] = $height;
-        }
-    }
-    */
-    function UpdateDataIntoTable($act, $pkeyval = 0, $newdata = false)
+    function updateDataIntoTable($act, $pkeyval = 0, $newdata = false)
     {
         # $act = 'doedit' : 'doadd'
         global $ast_tips;
@@ -4454,13 +4438,7 @@ EOJS;
                     $newState = $this->_getRecordData($keyvalues);
                     $delta = $this->getChangedRecords($oldState, $newState);
                 }
-                @call_user_func(
-                    $this->_auditing,
-                    $this->id,
-                    $act,
-                    $keyvalues,
-                    $delta
-                );
+                @call_user_func($this->_auditing,$this->id,$act,$keyvalues,$delta);
             }
             return $res_text;
         }
@@ -4524,6 +4502,10 @@ EOJS;
             }
 
             $val = isset($params[$editfld]) ? $params[$editfld] : "";
+            if($fld->flexfieldset && is_array($val)) {
+                # writeDebugInfo("$fid: flexfieldset : ", $val);
+                if($fld->flexfieldset) $val = json_encode($val,JSON_UNESCAPED_UNICODE);
+            }
             $standalone = true;
             if (is_callable("AppEnv::isStandalone")) {
                 $standalone = AppEnv::isStandalone();
@@ -5248,6 +5230,11 @@ EOJS;
             case "performCloneRecord":
                 $this->performCloneRecord($ast_parm);
                 exit();
+
+            case 'redrawFlexFieldSet':
+                $this->redrawFlexFieldSet($ast_parm);
+                exit;
+
             default:
                 exit(
                     "1" .
@@ -5642,7 +5629,7 @@ EOJS;
         if (empty($record_id)) {
             exit($ast_tips["err_nosourceid"] ?? "Source record ID not passed");
         }
-        $nevals = isset($ast_parm["newvals"]) ? $ast_parm["newvals"] : "";
+        $nevals =$ast_parm["cloned_newvals"] ?? '';
         $cloneChild = !empty($ast_parm["clonechild"]);
 
         $dta = Astedit::$db->GetQueryResult($this->id,"*",$this->pkEqExpression($record_id),false,true);
@@ -5704,8 +5691,39 @@ EOJS;
         }
         exit("1"); # signal "everything OK"
     }
+    /**
+    * Handler for FlexFieldSet on change parent field value
+    *
+    * @param mixed $ast_parm
+    */
+    public function redrawFlexFieldSet($ast_parm) {
+        # writeDebugInfo("ast_parm ", $ast_parm);
+        $flexField = $ast_parm['flexfield'];
+        $flDef = $this->fields[$flexField];
+        $recid = $ast_parm['_astkeyvalue_'] ?? 0;
+        $masterfield = $flDef->flexfieldset['masterfield'];
+        $masterValue = $ast_parm[$masterfield] ?? '';
+        $flexRenderer = $flDef->flexfieldset['htmlrender'] ?? '';
+        $curFlexValues = [];
 
-    function SetMultiPart($parm = true)
+        $ret = '';
+        if(is_callable($flexRenderer)) {
+            if($recid) {
+                $fldSetVals = Astedit::$db->select($this->id, ['where' => $this->pkEqExpression($recid),
+                  'fields'=>$flexField, 'singlerow'=>1, 'associative'=>0]
+                );
+                if(!empty($fldSetVals)) $curFlexValues = json_decode($fldSetVals, TRUE);
+            }
+            $ret = call_user_func($flexRenderer, [$masterValue, $curFlexValues, $flexField]);
+            if(is_array($ret))
+                $ret = $flexRenderer.'/TODO: render subform from fld data';
+        }
+        if(empty($ret)) $ret = "<input type='hidden' name='$flexField' value='' />"; # make clean field
+
+        exit('1' . AjaxResponse::setHtml('_flex_'.$flexField, $ret));
+    }
+
+    function setMultiPart($parm = true)
     {
         $this->_multipart = $parm;
     }
