@@ -1,0 +1,50 @@
+{
+  "mcp": {
+    "tools": [
+      {
+        "name": "run_python_mysql_script",
+        "description": "Выполняет Python-скрипт для подключения к MySQL и выполнения SQL-запроса. Используйте для получения данных из базы.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "sql_query": {
+              "type": "string",
+              "description": "SQL-запрос, который будет выполнен в базе данных MySQL."
+            }
+          },
+          "required": ["sql_query"]
+        }
+      }
+    ]
+  },
+  "database": {
+    "type": "mysql",
+    "host": "localhost",
+    "port": 3306,
+    "user": "your_user",
+    "password": "your_password",
+    "database": "your_database"
+  },
+  "description": {
+    "tables": [
+      {
+        "name": "users",
+        "description": "Таблица содержит информацию о зарегистрированных пользователях.",
+        "columns": [
+          {"name": "id", "type": "INT", "description": "Уникальный идентификатор пользователя"},
+          {"name": "name", "type": "VARCHAR(100)", "description": "Имя пользователя"},
+          {"name": "email", "type": "VARCHAR(100)", "description": "Электронная почта пользователя"}
+        ]
+      },
+      {
+        "name": "orders",
+        "description": "Таблица хранит сведения о заказах пользователей.",
+        "columns": [
+          {"name": "id", "type": "INT", "description": "Уникальный идентификатор заказа"},
+          {"name": "user_id", "type": "INT", "description": "ID пользователя, сделавшего заказ"},
+          {"name": "amount", "type": "DECIMAL(10,2)", "description": "Сумма заказа"}
+        ]
+      }
+    ]
+  }
+}

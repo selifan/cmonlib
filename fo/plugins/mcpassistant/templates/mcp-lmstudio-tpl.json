@@ -1,0 +1,31 @@
+{
+  "mcp": {
+    "tools": [
+      {
+        "name": "run_python_mysql_script",
+        "description": "Выполняет Python-скрипт для подключения к MySQL и выполнения SQL-запроса. Используйте для получения данных из базы.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "sql_query": {
+              "type": "string",
+              "description": "SQL-запрос, который будет выполнен в базе данных MySQL."
+            }
+          },
+          "required": ["sql_query"]
+        }
+      }
+    ]
+  },
+  "database": {
+    "type": "mysql",
+    "host": "localhost",
+    "port": 3306,
+    "user": "your_user",
+    "password": "your_password",
+    "database": "your_database"
+  },
+  "description": {
+    "tables": []
+  }
+}
