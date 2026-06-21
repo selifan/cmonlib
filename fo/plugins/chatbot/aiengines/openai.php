@@ -2,7 +2,7 @@
 /**
 * @name libs/openai.php
 * реализация протокола OpenAI работы с LLM
-* @version 0.10.001
+* @version 0.21.001
 * DeekSeek API docs по-русски: https://b.deepseek3.ru/api/
 * Точки входа для некоторых LLM
 * Deepseek: https://api.deepseek.com/v3
@@ -11,14 +11,14 @@
 **/
 # namespace Libs\aiengines;
 namespace plugins\chatbot\aiengines;
-
+use \AppEnv;
 class OpenAI {
     const METHOD_COMPLETIONS  = 'chat/completions';
     const METHOD_RESPONSES = 'responses';
 
-    private $debug = 1;
+    private $debug = 0;
     static $saveAllResponses = 1;
-    static $maxProcessSeconds = 300; # timeout для curl (секунды)
+    static $maxProcessSeconds = 300; # timeout для вызовов API через curl (секунды)
     private $providerName = '';
     private $engineId = '';
     private $apiKey = '';
@@ -97,7 +97,7 @@ class OpenAI {
             $cfgBody = @file_get_contents($cfgFile);
             # writeDebugInfo("KT54 cfgbody: $cfgBody");
             $this->config = json_decode($cfgBody, TRUE);
-            writeDebugInfo("KT55 config from $cfgFile:  ", $this->config);
+            # writeDebugInfo("KT55 config from $cfgFile:  ", $this->config);
         }
         elseif(is_array($cfg))
             $this->config = $cfg;
@@ -138,11 +138,9 @@ class OpenAI {
         if(is_file($apiKeysFile)) {
             $jsonData = file_get_contents($apiKeysFile);
             $arKeys = json_decode($jsonData,TRUE);
-            writeDebugInfo("all keys:, ", $arKeys);
             $ret = $arKeys[$keyId] ?? 'not-found';
         }
-        else writeDebugInfo("ERRKEY: no file, $apiKeysFile");
-        writeDebugInfo("key for $keyId: $ret");
+        # else writeDebugInfo("ERRKEY: no file, $apiKeysFile");
         return $ret;
     }
     public function setContext($context = '') {
@@ -153,8 +151,7 @@ class OpenAI {
         return $this->inputFiles;
     }
     public function getEngineName() {
-        writeDebugInfo("config, ", $this->config);
-        return $this->config['description'] ?? $this->config['name'];
+        return ($this->config['name'] ? $this->config['name'] : ($this->config['description'] ?? '')) ;
     }
     # при наличии настройки OauthUrl перед любым запроосом надо авторизоваться по OAuth и получить ключ!
     public function getApiKey() {
@@ -421,7 +418,7 @@ class OpenAI {
                             $value = mb_substr($value, 0, self::$textLimit,'UTF-8') . ' ...';
                         $txtOut .= $value . "|";
                     }
-                    $txtOut  .= "\r\n";
+                    $txtOut  .= "\n";
                     if($done>=($limit)) {
                         $starting = $startPos ? " начиная с $startPos-го" : '';
                         $endWarning = "показаны только $limit из $count моделей{$starting}, чтобы посмотреть продолжение, укаэите сколько пропустить: **@models 40** ";
@@ -432,7 +429,7 @@ class OpenAI {
             }
 
             if($this->debug) {
-                $debugFileName = appEnv::getAppFolder('tmp/') . substr(basename($this->engineId), 0,-5) . '.txt';
+                $debugFileName = AppEnv::getAppFolder('tmp/') . substr(basename($this->engineId), 0,-5) . '.txt';
                 file_put_contents($debugFileName, $txtOut, FILE_APPEND);
             }
             return $txtOut;

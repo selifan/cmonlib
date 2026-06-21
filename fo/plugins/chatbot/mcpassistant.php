@@ -4,8 +4,8 @@
 * @author Alexander Selifonov,
 * генератор файлов настройки MCP для LLM
 * @name plugins/chatbot/mcpassistant.php -
-* @version 0.10.001
-* last modified : 2026-06-19
+* @version 0.21.001
+* last modified : 2026-06-21
 */
 namespace plugins\chatbot;
 use \AppEnv;

@@ -10,5 +10,4 @@ return array(
    'chatbot:reqhist' => 'История запросов',
    'chatbot:mcpassistant' => 'MCP Assistant',
    'chatbot::error_engine' => '<div class="bordered p-2">Ошибка при загрузке модуля LLM движка!</div>',
-
 );

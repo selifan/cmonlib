@@ -7,7 +7,7 @@
 **/
 # namespace Libs\aiengines;
 namespace plugins\chatbot\aiengines;
-
+use \AppEnv;
 class Stub {
     const VERSION = '0.10';
     static $stupidAnswers = [
@@ -56,6 +56,9 @@ class Stub {
 
         }
         return $answer;
+    }
+    public function getEngineName() {
+        return 'stub - Эмулятор для тестирования';
     }
     public static function getEngineInfo() {
         return 'Stub (эмулятор LLM)';

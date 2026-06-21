@@ -437,9 +437,11 @@ EOHTM;
     public static function defaultStartMessage() {
         return '@models - получить список поддерживаемых моделей';
     }
+
     public static function generateDopInfo($arFiles=NULL) {
-        $aiInstance = \plugins\chatbot\AiBus::init(self::$engine);
-        if(method_exists($aiInstance, 'supportInputFiles'))
+
+        $aiInstance = \plugins\chatbot\AiBus::init();
+        if(is_object($aiInstance) && method_exists($aiInstance, 'supportInputFiles'))
             self::$supportFiles = $aiInstance->supportInputFiles();
         else self::$supportFiles = FALSE;
         if(self::$supportFiles) {

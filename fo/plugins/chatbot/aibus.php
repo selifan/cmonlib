@@ -2,7 +2,7 @@
 /**
 * @name plugins/chatbot/aibus.php
 * Шина для работы с движками ИИ (AI)
-* @version 0.10.001 started 2025-12-23
+* @version 0.21.001 started 2025-12-23
 * modified 2026-06-21
 */
 namespace plugins\chatbot;
@@ -29,6 +29,7 @@ class AiBus {
                 # writeDebugInfo("stub created: ", self::$engineInstance);
             } catch (Exception $e) {
                 self::$errorMessage = "new Instance stub exception: ". $e->getMessage();
+                exit( $e->getMessage() );
                 # writeDebugInfo("create obj Exception ", self::$errorMessage);
                 return FALSE;
             }
