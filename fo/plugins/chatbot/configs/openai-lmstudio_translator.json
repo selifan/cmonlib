@@ -1,0 +1,10 @@
+{
+    "name": "LM studio translate",
+    "description": "Переводчик рус-англ."
+    "baseUrl": "http://localhost:1234/v1/",
+    "chatModel": "responses",
+    "Temperature": 0.1,
+    "Model": "Qwen2.5-7B-Instruct",
+    "system_prompt": "You are a professional translator. Translate the following Russian text to English. Keep it concise, use technical terminology correctly. Output ONLY the translation.",
+    "maxTokens": 256
+}

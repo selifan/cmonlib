@@ -1,0 +1,9 @@
+{
+    "name": "OpenRouter/free",
+    "description":"OpenRouter бесплатный",
+    "baseUrl": "https://openrouter.ai/api/v1/",
+    "apiKey": "@openrouter-free",
+    "Temperature": 0.7,
+    "Model": "openrouter/free",
+    "maxTokens": 1024
+}

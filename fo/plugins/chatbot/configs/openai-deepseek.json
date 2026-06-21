@@ -1,0 +1,9 @@
+{
+  "name": "DeepSeek",
+  "description": "DeepSeek v.3",
+  "baseUrl" : "https://api.deepseek.com/v3",
+  "apiKey" : "@deepseek",
+  "Temperature" : 0.5,
+  "Model" : "deepseek-chat-33b",
+  "maxTokens" : 4096
+}

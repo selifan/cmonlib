@@ -1,0 +1,9 @@
+{
+    "name": "OpenRouter_mistral-24b-venice free",
+    "description":"OpenRouter - mistral-24b-venice-бесплатный",
+    "baseUrl": "https://openrouter.ai/api/v1/",
+    "apiKey" : "@openrouter-free",
+    "Temperature": 0.7,
+    "Model": "cognitivecomputations/dolphin-mistral-24b-venice-edition:free",
+    "maxTokens": 1024
+}

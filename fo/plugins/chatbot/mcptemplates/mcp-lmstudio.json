@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "api-alfo": {
+      "url": "https://localhost/alfo/jsvc/",
+      "headers": {
+        "Authorization": "Bearer YOUR_API_TOKEN"
+      },
+      "description": "generate description here!"
+    }
+  }
+}

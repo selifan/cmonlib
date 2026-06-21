@@ -1,0 +1,9 @@
+{
+    "name": "OpenRouter_Nvidia free",
+    "description":"OpenRouter - Qwen-бесплатный",
+    "baseUrl": "https://openrouter.ai/api/v1/",
+    "apiKey" : "@openrouter-free",
+    "Temperature": 0.7,
+    "Model": "nvidia/nemotron-3.5-content-safety:free",
+    "maxTokens": 1024
+}

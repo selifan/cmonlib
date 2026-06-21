@@ -1,0 +1,9 @@
+{
+  "name" : "OpenRouter",
+  "description": "Настройки для LLM-интегратора OpenRouter",
+  "baseUrl" : "https://openrouter.ai/api/v1/chat/completions",
+  "apiKey" : "@openrouter-free",
+  "Temperature" : 0.5,
+  "Model" : "openai/gpt-4",
+  "maxTokens" : 8192
+}

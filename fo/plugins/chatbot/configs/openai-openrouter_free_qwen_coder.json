@@ -1,0 +1,9 @@
+{
+    "name": "OpenRouter/free Qwen Coder",
+    "description":"OpenRouter Qwen Coder бесплатный",
+    "baseUrl": "https://openrouter.ai/api/v1/",
+    "apiKey" : "@openrouter-free",
+    "Temperature": 0.5,
+    "Model": "qwen/qwen3-coder:free",
+    "maxTokens": 4096
+}

@@ -1,0 +1,14 @@
+OpenRoputer free models (date: 21.06.2026)
+chatbot prompt: @models free 
+----------------------------------------
+openrouter/free
+cohere/north-mini-code:free
+nex-agi/nex-n2-pro:free
+nvidia/nemotron-3.5-content-safety:free
+nvidia/nemotron-3-ultra-550b-a55b:free
+nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free
+poolside/laguna-xs.2:free
+poolside/laguna-m.1:free
+google/gemma-4-26b-a4b-it:free
+qwen/qwen3-next-80b-a3b-instruct:free
+qwen/qwen3-coder:free

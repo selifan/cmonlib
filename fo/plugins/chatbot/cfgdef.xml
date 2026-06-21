@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- modified 2026-06-17 -->
+<cfgvars>
+  <page id="chatbot" title="Чат-бот" longtitle="Настройки чат-бота">
+    <fields>
+      <field name="chatbot_engine" type="select" width="240" label="LLM движок" options="@chatbot::getEngineList" />
+      <field name="chatbot_openai_config" type="select" width="240" label="Использовать настройку openai" options="@chatbot::getOpenAiConfigList" rowclass="no_stub"/>
+      <field name="chatbot_temperature" type="number" width="80" min="0" max="1" step="0.1" label="Температура 0 ... 1 (0 - стандартная для выбранной настройки)" rowclass="no_stub"/>
+      <field name="chatbot_context" type="int" width="80" min="0" max="16384" step="256" label="Размер контекста, токенов (0 - стандартный для выбранной настройки)" rowclass="no_stub"/>
+      <!--
+      <field name="chatbot_head_limits" type="header" label="Особые лимиты в продукте" />
+      <field name="chatbot_clientanketa_limit" type="int" width="80" label="Лимит премии для включения анкеты клиента" />
+      -->
+      <!-- <field name="chatbot_paymode" type="select" width="300" label="Онлайн-оплата полиса клиентом" options="@acquiring::getConfigOptionsModule" /> -->
+    </fields>
+  </page>
+
+    <script><![CDATA[
+chatBotCfg = {
+  chgEngine: function() {
+    var engine = $('#chatbot_engine').val();
+    console.log(engine);
+    if(engine === 'stub') $("tr.no_stub").hide();
+    else $("tr.no_stub").show();
+  }
+}
+$(document).ready(function () {
+  $("#chatbot_engine").change(chatBotCfg.chgEngine);
+  chatBotCfg.chgEngine();
+});
+
+]]></script>
+
+</cfgvars>

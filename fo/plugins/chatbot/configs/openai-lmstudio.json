@@ -1,0 +1,10 @@
+{
+  "name" : "LM studio",
+  "description" : "Настройки для работы с LM studio",
+  "baseUrl" : "http://localhost:1234/v1/",
+  "chatModel" : "responses",
+  "Temperature" : 0.5,
+  "Model" : "gpt-4o-mini",
+  "fileSupport": true,
+  "maxTokens" : 4096
+}

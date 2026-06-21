@@ -1,0 +1,9 @@
+{
+    "name": "GigaChat Sber",
+    "baseUrl": "https://gigachat.devices.sberbank.ru/api/v1/",
+    "OauthUrl": "https://ngw.devices.sberbank.ru:9443/api/v2/oauth",
+    "apiKey": "@gigachat",
+    "Temperature": 0.5,
+    "Model": "sberbank/gpt-4",
+    "maxTokens": 4096
+}
