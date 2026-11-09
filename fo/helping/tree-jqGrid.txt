@@ -1,0 +1,146 @@
+# пример js кода реализации иерархического списка подразделений в jqgrid версии 4.11 с ленивой загрузкой вложенных элементов. 
+id - код подразделения (primary key), parentid - ИД родительского, dept_name - нащвание. Раскрывать/скрывать дочерний список по иконке с плюсом-минусом слева.
+
+Ниже — рабочий шаблон для jqGrid 4.11 с treeGrid: true, моделью adjacency и ленивой загрузкой: сначала возвращаются только корневые подразделения, 
+а дети запрашиваются при нажатии на иконку «+». jqGrid при раскрытии сам отправляет на сервер nodeid, parentid и n_level; сервер должен вернуть только прямых потомков.
+
+
+
+HTML:
+<table id="deptTree"></table>
+<div id="deptTreePager"></div>
+
+JS
+$(function () {
+    $("#deptTree").jqGrid({
+        url: "/api/departments/tree",
+        datatype: "json",
+        mtype: "GET",
+
+        colNames: ["Код", "Наименование"],
+        colModel: [
+            {
+                name: "id",
+                key: true,
+                width: 120,
+                align: "left",
+                sortable: false
+            },
+            {
+                name: "dept_name",
+                width: 420,
+                align: "left",
+                sortable: false
+            }
+        ],
+
+        // Колонка, в которой отображаются + / - и отступы иерархии
+        ExpandColumn: "dept_name",
+
+        // Раскрытие также по клику на текст подразделения
+        ExpandColClick: true,
+
+        // Включаем древовидный режим
+        treeGrid: true,
+
+        // Модель "список смежности": id + parentid
+        treeGridModel: "adjacency",
+
+        // Соответствие полей JSON и служебных полей treeGrid
+        treeReader: {
+            level_field: "level",
+            parent_id_field: "parentid",
+            leaf_field: "isLeaf",
+            expanded_field: "expanded",
+            loaded: "loaded",
+            icon_field: "icon"
+        },
+
+        // Корневой уровень
+        tree_root_level: 0,
+
+        rowNum: 1000,
+        height: "auto",
+        width: 700,
+        autowidth: false,
+        shrinkToFit: false,
+        pager: "#deptTreePager",
+        caption: "Подразделения",
+
+        jsonReader: {
+            root: "rows",
+            page: "page",
+            total: "total",
+            records: "records",
+            repeatitems: false,
+            id: "id"
+        },
+
+        loadError: function (xhr, status, error) {
+            alert("Ошибка загрузки дерева подразделений: " + error);
+        }
+    });
+});
+
+Ожидаемый JSON
+При первой загрузке
+Сервер возвращает только корневые узлы (parentid = null или 0):
+
+{
+  "page": 1,
+  "total": 1,
+  "records": 2,
+  "rows": [
+    {
+      "id": "100",
+      "parentid": null,
+      "dept_name": "Дирекция",
+      "level": 0,
+      "isLeaf": false,
+      "expanded": false,
+      "loaded": false
+    },
+    {
+      "id": "200",
+      "parentid": null,
+      "dept_name": "Финансовый департамент",
+      "level": 0,
+      "isLeaf": false,
+      "expanded": false,
+      "loaded": false
+    }
+  ]
+}
+При раскрытии узла
+Когда пользователь нажимает «+», jqGrid отправляет примерно такой запрос:
+
+GET /api/departments/tree?nodeid=100&parentid=null&n_level=0
+
+Сервер должен вернуть только прямых детей узла 100:
+{
+  "page": 1,
+  "total": 1,
+  "records": 2,
+  "rows": [
+    {
+      "id": "110",
+      "parentid": "100",
+      "dept_name": "Отдел продаж",
+      "level": 1,
+      "isLeaf": true,
+      "expanded": false,
+      "loaded": true
+    },
+    {
+      "id": "120",
+      "parentid": "100",
+      "dept_name": "Отдел маркетинга",
+      "level": 1,
+      "isLeaf": false,
+      "expanded": false,
+      "loaded": false
+    }
+  ]
+}
+
+Важно: isLeaf: false нужно возвращать для узлов, у которых могут быть дети, даже если они ещё не загружены. Именно поэтому у такого узла отображается «+».
